@@ -3,6 +3,7 @@
 //   sk_test_<64 hex>     secret: shown once; only keccak256(sk) is stored onchain
 import { Hono } from "hono";
 import { keccak256, toBytes, formatEther, type Hex } from "viem";
+import { paymentRequired, paymentRequirements } from "@streampay-402/protocol";
 import { pub, CHAIN_ID, addrUrl } from "./chain";
 import art from "./registry-artifact.json";
 
@@ -22,15 +23,18 @@ export async function readService(id: bigint) {
 }
 
 export function termsFor(id: bigint, s: Awaited<ReturnType<typeof readService>>) {
-  return {
-    x402Version: 1,
-    accepts: [{
-      scheme: "stream-per-second", network: `eip155:${CHAIN_ID}`, asset: "native:MON",
-      payTo: s.payee, escrow: ESCROW, ratePerSec: s.ratePerSec.toString(), minDeposit: (s.ratePerSec * 10n).toString(),
-      resource: `registry:${REGISTRY}:${id}`, description: `${s.name} (${formatEther(s.ratePerSec)} MON/s)`,
-      extra: { open: "StreamEscrow.open(payTo, ratePerSec) payable", publishableKey: pkFor(id) },
-    }],
-  };
+  const resourceUrl = `registry:${REGISTRY}:${id}`;
+  const description = `${s.name} (${formatEther(s.ratePerSec)} MON/s)`;
+  return paymentRequired(paymentRequirements({
+    payTo: s.payee,
+    escrow: ESCROW,
+    ratePerSec: s.ratePerSec,
+    chainId: CHAIN_ID,
+    resourceUrl,
+    description,
+    publishableKey: pkFor(id),
+    serviceName: s.name,
+  }), resourceUrl);
 }
 
 export const registry = new Hono();

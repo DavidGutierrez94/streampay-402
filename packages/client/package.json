@@ -1,0 +1,17 @@
+{
+  "name": "@streampay-402/client",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Buyer SDK for the x402 stream-per-second scheme. Opens and closes escrow streams and handles HTTP 402. Not published to npm.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@streampay-402/protocol": "workspace:*",
+    "viem": "^2.57.5"
+  }
+}

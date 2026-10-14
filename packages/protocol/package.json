@@ -1,0 +1,13 @@
+{
+  "name": "@streampay-402/protocol",
+  "version": "0.0.0",
+  "private": true,
+  "description": "x402 stream-per-second scheme types and HTTP codec. Not published to npm.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test"
+  }
+}
