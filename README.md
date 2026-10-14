@@ -1,6 +1,7 @@
 <p align="center"><img src="assets/logo.png" alt="StreamPay-402" width="320"></p>
 
-<h3 align="center">Per-second billing for AI agent services: an add-on scheme for x402, on Monad.</h3>
+<h3 align="center">You should only pay for the time you actually use.</h3>
+<p align="center">StreamPay-402 is per-second billing for anything metered by time (compute, APIs, GPUs, media streams, rentals), built on x402 and Monad. First use case: AI agents paying for services.</p>
 
 <p align="center">
   <a href="https://calgary-creativity-creations-courier.trycloudflare.com"><b>Live demo</b></a> ·
@@ -12,11 +13,14 @@
 
 ---
 
+## Why
+You should only pay for the time you actually use.
+
 ## Problem
-x402 handles pay-per-request well, but services billed by time (GPU and inference sessions, voice minutes, browser sessions, long agent jobs) still force a bad choice: prepaid credits with leftover balances, or plans that charge for idle time. An agent that rents a GPU for 47 seconds should pay for 47 seconds.
+Time is what you're actually buying when you pay for compute, APIs, GPUs, media streams or rentals. Yet you're almost never billed by it. You buy prepaid credits that leave balances stranded, subscriptions that keep charging while you sit idle, or hourly blocks you only partly use. Card rails add minimums and chargebacks that rule out micro-payments. AI agents make this worse. They buy inference, GPU time, voice and browser sessions in bursts of seconds, without a human there to cancel. x402 solved paying per request. Paying for time still has no good answer.
 
 ## Solution
-StreamPay-402 adds a `stream-per-second` scheme to the x402 402 handshake. The agent opens a capped escrow stream on Monad, the service meters it every second and cuts off when the deposit runs out, and on `close()` the provider gets `rate × elapsed` while the payer is refunded the rest **in the same transaction**. Providers sign up with email, register their service onchain and get Stripe-style keys.
+StreamPay-402 bills by the second for anything metered by time. You open a capped escrow stream on Monad and use the service. When you stop, the provider gets exactly `rate × elapsed` and the rest is refunded **in the same transaction**. It plugs into x402 as one new scheme, `stream-per-second`, so it isn't a new protocol. The first use case, and the thing the demo shows, is AI agents paying for services: the agent gets a 402, opens a stream, gets metered output and closes with an instant refund. Providers sign up with email through Privy, register their service onchain and get Stripe-style keys.
 
 ## Try it in 60 seconds
 1. Open the [live demo](https://calgary-creativity-creations-courier.trycloudflare.com).
