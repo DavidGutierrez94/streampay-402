@@ -86,7 +86,7 @@ function PrivyFlow({ cfg }: { cfg: Cfg }) {
   const [creating, setCreating] = useState(false);
   useEffect(() => { (async () => { if (!w) return; setErr(null); try { await w.switchChain(monadTestnet.id).catch(() => {}); setProv(await w.getEthereumProvider()); } catch (e: any) { setErr("Could not open your wallet: " + (e?.message ?? e)); } })(); }, [w?.address]);
   useEffect(() => { setSlow(false); if (authenticated && !prov) { const t = setTimeout(() => setSlow(true), 6000); return () => clearTimeout(t); } }, [authenticated, prov]);
-  const mk = async () => { setCreating(true); setErr(null); try { await createWallet(); } catch (e: any) { setErr("Wallet creation failed: " + (e?.message ?? e) + ". Check that embedded wallets are enabled in the Privy dashboard."); } setCreating(false); };
+  const mk = async () => { setCreating(true); setErr(null); try { await createWallet(); } catch (e: any) { setErr("Wallet creation failed: " + (e?.message ?? e) + ". Check that embedded wallets are enabled in the auth provider dashboard."); } setCreating(false); };
   const doLogin = () => { setErr(null); try { login(); } catch (e: any) { setErr("Login failed: " + (e?.message ?? e)); } };
   if (!ready) return <p className="status">Loading sign-in…</p>;
   if (!authenticated) return <><p className="step"><b>Step 1 of 3</b> · Sign up or log in with your email. We create a wallet for you.</p><button onClick={doLogin}>Continue with email</button>{err && <p className="err" role="alert">{err}</p>}</>;
@@ -96,7 +96,7 @@ function PrivyFlow({ cfg }: { cfg: Cfg }) {
     {err && <p className="err" role="alert">{err}</p>}
     <button className="link" onClick={logout}>Log out and start over</button>
   </>);
-  return <Flow cfg={cfg} provider={prov} address={w.address as `0x${string}`} onLogout={logout} label="Privy embedded wallet" />;
+  return <Flow cfg={cfg} provider={prov} address={w.address as `0x${string}`} onLogout={logout} label="Email wallet" />;
 }
 
 function InjectedFlow({ cfg }: { cfg: Cfg }) {
