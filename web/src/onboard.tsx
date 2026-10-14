@@ -82,7 +82,7 @@ function Flow({ cfg, provider, address, onLogout, label }: { cfg: Cfg; provider:
             <div key={k} className="key"><code>{keys[k]}</code><button onClick={() => navigator.clipboard.writeText(keys[k])}>copy</button></div>
           ))}
           <pre>{`# agents discover your per-second terms\ncurl $HOST/api/registry/terms/${keys.pk}\n# you authenticate as the provider\ncurl -H "Authorization: Bearer sk_test_…" -H "X-Publishable-Key: ${keys.pk}" $HOST/api/registry/me`}</pre>
-          <div className="next"><a className="btn" href="/demo">Try it live →</a><a className="btn ghost" href="https://github.com/DavidGutierrez94/streampay-402#readme" target="_blank">Read the docs</a></div>
+          <div className="next"><a className="btn" href="/dashboard">Open your dashboard →</a><a className="btn ghost" href="/demo">Try it live →</a><a className="btn ghost" href="https://github.com/DavidGutierrez94/streampay-402#readme" target="_blank">Read the docs</a></div>
         </div>
       )}
       <ul>{log.map((l, i) => <li key={i}>{l.m} {l.tx && <a href={`${EXPL}/tx/${l.tx}`} target="_blank">tx ↗</a>}</li>)}</ul>
