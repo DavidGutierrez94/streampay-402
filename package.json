@@ -18,6 +18,7 @@
   },
   "scripts": {
     "build:onboard": "bun build web/src/onboard.tsx --outfile web/onboard.js --minify --target browser --define process.env.NODE_ENV='\"production\"' --define 'process.env={}'",
+    "test": "bun test",
     "server": "bun src/server.ts",
     "agent": "bun examples/agent.ts",
     "provider": "bun examples/provider.ts",
