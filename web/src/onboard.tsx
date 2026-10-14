@@ -1,6 +1,12 @@
 // Onboarding: Privy email login -> embedded wallet -> onchain ServiceRegistry sign-up -> Stripe-style keys.
 // Falls back to an injected wallet (window.ethereum) when PRIVY_APP_ID is not configured.
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+
+const Spinner = () => <span className="spinner" aria-hidden="true" />;
+function Status({ text, tx }: { text: string | null; tx?: string | null }) {
+  if (!text) return null;
+  return <p className="status" role="status" aria-live="polite">{text !== "Done" && <Spinner />}{text}{tx && <> · <a href={`https://testnet.monadscan.com/tx/${tx}`} target="_blank">view tx ↗</a></>}</p>;
+}
 import { createRoot } from "react-dom/client";
 import { PrivyProvider, usePrivy, useWallets, useCreateWallet } from "@privy-io/react-auth";
 import { createWalletClient, createPublicClient, custom, http, parseEther, keccak256, toBytes, decodeEventLog, formatEther } from "viem";
@@ -13,7 +19,10 @@ const newSk = () => "sk_test_" + Array.from(crypto.getRandomValues(new Uint8Arra
 
 function Flow({ cfg, provider, address, onLogout, label }: { cfg: Cfg; provider: any; address?: `0x${string}`; onLogout?: () => void; label: string }) {
   const [log, setLog] = useState<{ m: string; tx?: string }[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const lock = useRef(false);
+  const [stage, setStage] = useState<string | null>(null);
+  const [curTx, setCurTx] = useState<string | null>(null);
   const [keys, setKeys] = useState<{ pk: string; sk: string } | null>(null);
   const [bal, setBal] = useState<string>("…");
   const [name, setName] = useState("my-gpu-session");
@@ -25,19 +34,25 @@ function Flow({ cfg, provider, address, onLogout, label }: { cfg: Cfg; provider:
 
   const wc = () => createWalletClient({ account: address!, chain: monadTestnet, transport: custom(provider) });
   const tx = async (functionName: string, args: any[]) => {
+    setStage("Confirm in wallet…");
     const h = await wc().writeContract({ address: cfg.registry, abi: cfg.abi, functionName, args, gas: 300000n });
-    add(`${functionName} sent`, h);
+    add(`${functionName} sent`, h); setCurTx(h); setStage("Waiting for Monad confirmation…");
     const r = await pub.waitForTransactionReceipt({ hash: h });
     if (r.status !== "success") throw new Error(functionName + " reverted");
     return r;
   };
-  const run = (f: () => Promise<void>) => async () => { setBusy(true); setErr(null); try { await f(); } catch (e: any) { const m = e.shortMessage ?? e.message; setErr(m); add("error: " + m); } setBusy(false); refresh(); };
+  const run = (id: string, f: () => Promise<void>) => async () => {
+    if (lock.current) return; lock.current = true;
+    setBusy(id); setErr(null); setCurTx(null); setStage(id === "drip" ? "Getting gas…" : "Confirm in wallet…");
+    try { await f(); setStage("Done"); } catch (e: any) { const m = e.shortMessage ?? e.message; setErr(m); add("error: " + m); setStage(null); }
+    lock.current = false; setBusy(null); refresh();
+  };
 
-  const drip = run(async () => {
+  const drip = run("drip", async () => {
     const r = await fetch("/api/registry/drip", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ address }) }).then((r) => r.json());
-    if (r.tx) { add("testnet gas drip received", r.tx); await pub.waitForTransactionReceipt({ hash: r.tx }).catch(() => {}); } else throw new Error(r.error ?? "drip failed");
+    if (r.tx) { add("testnet gas drip received", r.tx); setCurTx(r.tx); setStage("Waiting for Monad confirmation…"); await pub.waitForTransactionReceipt({ hash: r.tx }).catch(() => {}); } else throw new Error(r.error ?? "drip failed");
   });
-  const regService = run(async () => {
+  const regService = run("svc", async () => {
     const sk = newSk();
     const r = await tx("registerService", [name, parseEther(rate), address, keccak256(toBytes(sk))]);
     const ev: any = r.logs.map((l) => { try { return decodeEventLog({ abi: cfg.abi, ...l }); } catch { return null; } }).find((e: any) => e?.eventName === "ServiceRegistered");
@@ -45,7 +60,7 @@ function Flow({ cfg, provider, address, onLogout, label }: { cfg: Cfg; provider:
     setKeys({ pk: `pk_test_${ev.args.serviceId}`, sk });
     add(`service #${ev.args.serviceId} registered onchain`);
   });
-  const regAgent = run(async () => { await tx("registerAgent", [name.replace(/-session$/, "") + "-agent"]); add("agent identity registered onchain"); });
+  const regAgent = run("agent", async () => { await tx("registerAgent", [name.replace(/-session$/, "") + "-agent"]); add("agent identity registered onchain"); });
 
   return (
     <div className="card">
@@ -54,11 +69,11 @@ function Flow({ cfg, provider, address, onLogout, label }: { cfg: Cfg; provider:
       <label>Service name <input value={name} onChange={(e) => setName(e.target.value)} /></label>
       <label>Price (MON / second) <input value={rate} onChange={(e) => setRate(e.target.value)} /></label>
       <div className="row">
-        <button disabled={busy} onClick={drip}>1. Get testnet gas</button>
-        <button disabled={busy} onClick={regService}>2. Register service + get API keys</button>
-        <button disabled={busy} onClick={regAgent}>3. Register agent identity (optional)</button>
+        <button disabled={!!busy} aria-busy={busy === "drip"} onClick={drip}>{busy === "drip" && <Spinner />}1. Get testnet gas</button>
+        <button disabled={!!busy} aria-busy={busy === "svc"} onClick={regService}>{busy === "svc" && <Spinner />}{busy === "svc" ? "Registering service…" : "2. Register service + get API keys"}</button>
+        <button disabled={!!busy} aria-busy={busy === "agent"} onClick={regAgent}>{busy === "agent" && <Spinner />}3. Register agent identity (optional)</button>
       </div>
-      {busy && <p className="status">Waiting for Monad testnet…</p>}
+      <Status text={stage} tx={curTx} />
       {err && <p className="err" role="alert">{err}</p>}
       {keys && (
         <div className="keys">
@@ -86,13 +101,14 @@ function PrivyFlow({ cfg }: { cfg: Cfg }) {
   const [creating, setCreating] = useState(false);
   useEffect(() => { (async () => { if (!w) return; setErr(null); try { await w.switchChain(monadTestnet.id).catch(() => {}); setProv(await w.getEthereumProvider()); } catch (e: any) { setErr("Could not open your wallet: " + (e?.message ?? e)); } })(); }, [w?.address]);
   useEffect(() => { setSlow(false); if (authenticated && !prov) { const t = setTimeout(() => setSlow(true), 6000); return () => clearTimeout(t); } }, [authenticated, prov]);
-  const mk = async () => { setCreating(true); setErr(null); try { await createWallet(); } catch (e: any) { setErr("Wallet creation failed: " + (e?.message ?? e) + ". Check that embedded wallets are enabled in the auth provider dashboard."); } setCreating(false); };
+  const mk = async () => { if (creating) return; setCreating(true); setErr(null); try { await createWallet(); } catch (e: any) { setErr("Wallet creation failed: " + (e?.message ?? e) + ". Check that embedded wallets are enabled in the auth provider dashboard."); } setCreating(false); };
   const doLogin = () => { setErr(null); try { login(); } catch (e: any) { setErr("Login failed: " + (e?.message ?? e)); } };
   if (!ready) return <p className="status">Loading sign-in…</p>;
   if (!authenticated) return <><p className="step"><b>Step 1 of 3</b> · Sign up or log in with your email. We create a wallet for you.</p><button onClick={doLogin}>Continue with email</button>{err && <p className="err" role="alert">{err}</p>}</>;
   if (!w || !prov) return (<>
     <p className="step"><b>Step 2 of 3</b> · Signed in{user?.email?.address ? ` as ${user.email.address}` : ""}. {wReady && !w ? "You don't have a wallet yet." : "Setting up your embedded wallet…"}</p>
-    {(slow || (wReady && !w)) && <button disabled={creating} onClick={mk}>{creating ? "Creating wallet…" : "Create my wallet"}</button>}
+    {(slow || (wReady && !w)) && <button disabled={creating} onClick={mk}>{creating && <Spinner />}{creating ? "Creating wallet…" : "Create my wallet"}</button>}
+    <Status text={creating ? "Creating your wallet…" : null} />
     {err && <p className="err" role="alert">{err}</p>}
     <button className="link" onClick={logout}>Log out and start over</button>
   </>);

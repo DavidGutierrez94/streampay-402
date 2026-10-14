@@ -43,3 +43,11 @@ a:hover{text-decoration-color:var(--signal)}
 .foot nav{display:flex;flex-wrap:wrap;gap:8px 22px}
 .foot a{color:var(--ink-2)}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important}}
+
+/* loading spinner for pending async/onchain actions */
+.spinner{display:inline-block;width:1em;height:1em;margin-right:.5em;vertical-align:-.15em;border:2px solid currentColor;border-color:var(--signal,#e8461e);border-right-color:transparent;border-radius:50%;animation:sp-spin .7s linear infinite}
+button .spinner{border-color:currentColor;border-right-color:transparent}
+.status .spinner{border-color:var(--signal,#e8461e);border-right-color:transparent}
+button[disabled]{cursor:progress;opacity:.75}
+@keyframes sp-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spinner{animation-duration:2s}}
