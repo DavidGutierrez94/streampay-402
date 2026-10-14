@@ -59,6 +59,8 @@ const PAGES: Record<string, Meta> = {
     description: "Pay only for the time you actually use: register your agent, API or compute service, set a price per second onchain and get API keys. Email sign-up, no wallet needed." },
   demo: { path: "/demo", title: "Live demo · An AI agent paying by the second · StreamPay-402",
     description: "Pay only for the time you actually use: watch an AI agent open an escrow stream on Monad testnet, pay per second for a service and get unused funds refunded." },
+  dashboard: { path: "/dashboard", title: "Dashboard · Services, streams, and payouts · StreamPay-402",
+    description: "Pay only for the time you actually use: see the services, active and closed streams, claimed earnings, and payouts for the wallet you signed in with. Read on Monad testnet." },
 };
 function headTags(base: string, m: Meta) {
   const url = base + m.path, img = base + "/og.png", t = esc(m.title), d = esc(m.description);
@@ -100,6 +102,8 @@ app.get("/theme.css", () => new Response(Bun.file("web/theme.css"), { headers: {
 app.route("/api/registry", registry);   // onboarding: ServiceRegistry + pk_/sk_ keys
 app.get("/onboard", page("web/onboard.html", "onboard"));
 app.get("/onboard.js", () => new Response(Bun.file("web/onboard.js"), { headers: { "content-type": "text/javascript" } }));
+app.get("/dashboard", page("web/dashboard.html", "dashboard"));
+app.get("/dashboard.js", () => new Response(Bun.file("web/dashboard.js"), { headers: { "content-type": "text/javascript" } }));
 // Any service registered via /onboard is immediately callable here, metered per second
 app.get("/api/svc/:id", (c) => {
   const raw = c.req.param("id"); const m = /^(?:pk_test_)?(\d{1,20})$/.exec(raw);
