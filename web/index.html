@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="light"><meta name="theme-color" content="#f0f0eb">
 <title>streampay-402 · per-second x402 on Monad</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23836EF9'/%3E%3Cpath d='M5.5 14c2.2-4.4 4.3-4.4 6.5 0s4.3 4.4 6.5 0' stroke='white' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='3' fill='%2316140f'/%3E%3Cpath d='M4 16h3v-4h3v-4h3v4h3v4h4' stroke='white' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Martian+Mono:wdth,wght@87.5..112.5,400..600&display=swap" rel="stylesheet">
 <style>
 :root{
   --bg:#09090b; --panel:#0f0f12; --panel-2:#141418; --line:rgba(255,255,255,.07); --line-2:rgba(255,255,255,.12);
@@ -190,15 +190,72 @@ footer code{font-family:var(--mono);color:var(--muted)}
   .ev-msg{white-space:normal}
 }
 </style>
+<style>
+/* v3: match web/theme.css "meter tape" world: paper, ink, one vermilion signal */
+:root{--bg:#f0f0eb;--panel:#f7f7f2;--panel-2:#e5e5dd;--line:rgba(22,20,15,.16);--line-2:rgba(22,20,15,.32);
+--text:#16140f;--muted:#4a463c;--faint:#6d685c;--accent:#e8461e;--accent-text:#b8330f;--accent-soft:rgba(232,70,30,.1);
+--green:#1f7a4a;--green-soft:rgba(31,122,74,.1);--amber:#a86200;--amber-soft:rgba(168,98,0,.12);--red:#b42318;--red-soft:rgba(180,35,24,.1);
+--sans:"Archivo",ui-sans-serif,system-ui,sans-serif;--mono:"Martian Mono",ui-monospace,"SF Mono",Menlo,monospace;--r:4px}
+html{background:var(--bg)}
+body{background:var(--bg);font:400 15px/1.55 var(--sans)}
+:focus-visible{outline-color:var(--accent)}
+.wrap{padding:0 clamp(16px,4vw,40px)}
+.top{flex-wrap:wrap;padding:18px 0;margin-bottom:0;border-bottom:1px solid var(--text)}
+.name{font-weight:700;font-size:17px;font-variation-settings:"wdth" 112}
+.nav3{display:flex;gap:clamp(12px,2.2vw,24px);font-size:15px}
+.nav3 a{color:var(--muted)}.nav3 a:hover{color:var(--text)}.nav3 a[aria-current]{color:var(--text);box-shadow:inset 0 -2px 0 var(--accent)}
+.net{border-radius:3px;border-color:var(--line-2)}
+.btn{border-radius:3px;height:40px;background:var(--text);color:var(--bg);font:600 14px var(--sans);border:1px solid var(--text)}
+.btn:hover{background:var(--accent-text);border-color:var(--accent-text);color:#fff}
+.btn[aria-busy=true]{background:var(--panel-2);color:var(--text)}
+.pagehead{display:flex;flex-wrap:wrap;align-items:end;justify-content:space-between;gap:12px 28px;padding:clamp(24px,4vw,44px) 0 18px}
+.pagehead h1{margin:0;font-size:clamp(30px,4.4vw,52px);line-height:.98;font-weight:800;letter-spacing:-.03em;font-variation-settings:"wdth" 116}
+.pagehead h1 span{color:var(--accent)}
+.pagehead p{margin:0;max-width:44ch;color:var(--muted)}
+.ruler{height:14px;margin:0 0 20px;border-bottom:1px solid var(--text);background:repeating-linear-gradient(90deg,var(--text) 0 1px,transparent 1px 12px) bottom/100% 6px no-repeat,repeating-linear-gradient(90deg,var(--text) 0 1px,transparent 1px 60px) bottom/100% 14px no-repeat}
+.card{background:var(--panel);border:1px solid var(--text);border-radius:4px;box-shadow:0 1px 0 var(--text)}
+.hero::before{display:none}
+.eyebrow{font:500 11.5px var(--mono);letter-spacing:.04em;color:var(--muted)}
+.counter{font-family:var(--mono);font-weight:500;font-variation-settings:"wdth" 87.5;letter-spacing:-.05em}
+body[data-phase] .counter{color:#b9b4a6}
+body[data-phase] .counter .lo{color:#cfcabd}
+body[data-phase=streaming] .counter .hi,body[data-phase=cutoff] .counter .hi,body[data-phase=refunded] .counter .hi,body[data-phase=closing] .counter .hi{color:var(--text)}
+body[data-phase=streaming] .counter .hi{color:var(--accent)}
+.counter .lo{color:var(--faint)}
+.meta b,.row b,.tile .v{font-family:var(--mono);font-size:14px}
+.tile .v{font-size:20px}
+.bar{background:var(--panel-2);border-radius:2px;height:10px}
+.fill{background:var(--accent)!important;border-radius:0}
+body[data-phase=refunded] .fill{background:var(--green)!important}
+body[data-phase=idle] .fill,body[data-phase=starting] .fill,body[data-phase=negotiating] .fill{background:var(--line-2)!important}
+.cells i{background:var(--panel-2);border-radius:0}
+.cells i.u{background:var(--accent)}.cells i.live{background:var(--accent-text)}.cells i.r{background:rgba(31,122,74,.55)}
+.tile{border-radius:3px;background:var(--bg);box-shadow:inset 0 0 0 1px var(--line)}
+.status{border-radius:3px;background:var(--panel-2)}
+.status[data-tone=accent]{box-shadow:inset 0 0 0 1px rgba(232,70,30,.4)}
+.dot{background:var(--panel)}
+.step.done .dot{box-shadow:inset 0 0 0 1px rgba(232,70,30,.45)}
+.step.done::before{background:rgba(232,70,30,.45)}
+.step.on .dot{color:#fff}
+.code{border-radius:3px;background:var(--panel-2)}
+.link:hover{color:var(--text)}
+.chip{border-radius:3px;box-shadow:inset 0 0 0 1px rgba(232,70,30,.3)}
+.chip:hover{background:var(--accent);color:#fff}
+.toast{background:var(--text);color:var(--bg);border-radius:3px;box-shadow:none}
+footer{border-top:1px solid var(--text);margin-top:40px;color:var(--muted)}
+footer a{color:var(--muted)}
+.feed h2,.side h2{font-size:15px;font-weight:700}
+@media (max-width:640px){.top-r{width:100%;justify-content:space-between}.nav3{order:-1;width:100%}}
+</style>
 </head>
 <body data-phase="idle">
 <div class="wrap">
   <header class="top">
     <div class="brand">
-      <svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6.5" fill="#836EF9"/><path d="M5.5 14c2.2-4.4 4.3-4.4 6.5 0s4.3 4.4 6.5 0" stroke="#fff" stroke-width="2.2" fill="none" stroke-linecap="round"/></svg>
-      <div class="name">streampay<span>-402</span></div>
-      <div class="tag">Per-second billing for AI agents · an x402 add-on</div>
+      <a href="/" aria-label="streampay-402 home" style="display:flex;align-items:center;gap:10px"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="3" fill="#16140f"/><path d="M4 16h3v-4h3v-4h3v4h3v4h4" stroke="#e8461e" stroke-width="2.2" fill="none" stroke-linejoin="round"/></svg>
+      <div class="name">streampay<span>-402</span></div></a>
     </div>
+    <nav class="nav3" aria-label="Primary"><a href="/">Home</a><a href="/demo" aria-current="page">Live demo</a><a href="/onboard">Sign up</a></nav>
     <div class="top-r">
       <a class="net" id="net" target="_blank" rel="noopener" title="StreamEscrow on Monad testnet explorer"><i></i><span id="netLabel">Monad Testnet</span></a>
       <button class="btn" id="run" type="button" aria-busy="false">
@@ -208,6 +265,8 @@ footer code{font-family:var(--mono);color:var(--muted)}
     </div>
   </header>
 
+  <div class="pagehead"><h1>Watch an agent pay <span>by the second.</span></h1><p>Press Run agent: it opens an escrow stream on Monad testnet, the meter bills every second, and the unused budget is refunded on close.</p></div>
+  <div class="ruler" aria-hidden="true"></div>
   <main class="grid">
     <section class="card hero" aria-labelledby="costLabel">
       <div class="hero-head">
@@ -230,8 +289,8 @@ footer code{font-family:var(--mono);color:var(--muted)}
         <div class="cells" id="cells" aria-hidden="true"></div>
         <div class="legend" aria-hidden="true">
           <span><i style="background:var(--accent)"></i>Billed</span>
-          <span><i style="background:rgba(255,255,255,.12)"></i>Unused budget</span>
-          <span><i style="background:rgba(61,214,140,.55)"></i>Refunded</span>
+          <span><i style="background:var(--panel-2);box-shadow:inset 0 0 0 1px var(--line)"></i>Unused budget</span>
+          <span><i style="background:rgba(31,122,74,.55)"></i>Refunded</span>
           <span id="cellUnit"></span>
         </div>
       </div>
@@ -275,7 +334,7 @@ footer code{font-family:var(--mono);color:var(--muted)}
 
   <footer>
     <span><code>owed = min(deposit, rate × (now − start))</code></span>
-    <span>Thin layer on x402 · Built on Monad</span>
+    <span>Thin layer on x402 · Built on Monad · <a href="/">Home</a> · <a href="/onboard">Sign up</a> · <a href="https://github.com/DavidGutierrez94/streampay-402">GitHub</a></span>
   </footer>
 </div>
 <div class="toast" id="toast" role="alert"></div>

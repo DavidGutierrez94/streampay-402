@@ -2,7 +2,7 @@
 // Falls back to an injected wallet (window.ethereum) when PRIVY_APP_ID is not configured.
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { PrivyProvider, usePrivy, useWallets } from "@privy-io/react-auth";
+import { PrivyProvider, usePrivy, useWallets, useCreateWallet } from "@privy-io/react-auth";
 import { createWalletClient, createPublicClient, custom, http, parseEther, keccak256, toBytes, decodeEventLog, formatEther } from "viem";
 import { monadTestnet } from "viem/chains";
 
@@ -19,6 +19,7 @@ function Flow({ cfg, provider, address, onLogout, label }: { cfg: Cfg; provider:
   const [name, setName] = useState("my-gpu-session");
   const [rate, setRate] = useState("0.001");
   const add = (m: string, tx?: string) => setLog((l) => [...l, { m, tx }]);
+  const [err, setErr] = useState<string | null>(null);
   const refresh = async () => address && setBal(formatEther(await pub.getBalance({ address })));
   useEffect(() => { refresh(); }, [address]);
 
@@ -30,16 +31,17 @@ function Flow({ cfg, provider, address, onLogout, label }: { cfg: Cfg; provider:
     if (r.status !== "success") throw new Error(functionName + " reverted");
     return r;
   };
-  const run = (f: () => Promise<void>) => async () => { setBusy(true); try { await f(); } catch (e: any) { add("error: " + (e.shortMessage ?? e.message)); } setBusy(false); refresh(); };
+  const run = (f: () => Promise<void>) => async () => { setBusy(true); setErr(null); try { await f(); } catch (e: any) { const m = e.shortMessage ?? e.message; setErr(m); add("error: " + m); } setBusy(false); refresh(); };
 
   const drip = run(async () => {
     const r = await fetch("/api/registry/drip", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ address }) }).then((r) => r.json());
-    r.tx ? add("testnet gas drip received", r.tx) : add(r.error ?? "drip failed");
+    if (r.tx) { add("testnet gas drip received", r.tx); await pub.waitForTransactionReceipt({ hash: r.tx }).catch(() => {}); } else throw new Error(r.error ?? "drip failed");
   });
   const regService = run(async () => {
     const sk = newSk();
     const r = await tx("registerService", [name, parseEther(rate), address, keccak256(toBytes(sk))]);
     const ev: any = r.logs.map((l) => { try { return decodeEventLog({ abi: cfg.abi, ...l }); } catch { return null; } }).find((e: any) => e?.eventName === "ServiceRegistered");
+    if (!ev) throw new Error("registered, but no ServiceRegistered event found in the receipt");
     setKeys({ pk: `pk_test_${ev.args.serviceId}`, sk });
     add(`service #${ev.args.serviceId} registered onchain`);
   });
@@ -48,13 +50,16 @@ function Flow({ cfg, provider, address, onLogout, label }: { cfg: Cfg; provider:
   return (
     <div className="card">
       <p className="muted">{label}: <a href={`${EXPL}/address/${address}`} target="_blank">{address}</a> · {bal} MON {onLogout && <button className="link" onClick={onLogout}>log out</button>}</p>
+      <p className="step"><b>Step 3 of 3</b> · Register your service onchain to get your API keys.{bal === "0" && " You need testnet gas first (button 1)."}</p>
       <label>Service name <input value={name} onChange={(e) => setName(e.target.value)} /></label>
       <label>Price (MON / second) <input value={rate} onChange={(e) => setRate(e.target.value)} /></label>
       <div className="row">
         <button disabled={busy} onClick={drip}>1. Get testnet gas</button>
         <button disabled={busy} onClick={regService}>2. Register service + get API keys</button>
-        <button disabled={busy} onClick={regAgent}>3. Register agent identity</button>
+        <button disabled={busy} onClick={regAgent}>3. Register agent identity (optional)</button>
       </div>
+      {busy && <p className="status">Waiting for Monad testnet…</p>}
+      {err && <p className="err" role="alert">{err}</p>}
       {keys && (
         <div className="keys">
           <b>Your API keys</b> — the secret is shown once; only its keccak256 hash is onchain.
@@ -62,6 +67,7 @@ function Flow({ cfg, provider, address, onLogout, label }: { cfg: Cfg; provider:
             <div key={k} className="key"><code>{keys[k]}</code><button onClick={() => navigator.clipboard.writeText(keys[k])}>copy</button></div>
           ))}
           <pre>{`# agents discover your per-second terms\ncurl $HOST/api/registry/terms/${keys.pk}\n# you authenticate as the provider\ncurl -H "Authorization: Bearer sk_test_…" -H "X-Publishable-Key: ${keys.pk}" $HOST/api/registry/me`}</pre>
+          <div className="next"><a className="btn" href="/demo">Try it live →</a><a className="btn ghost" href="https://github.com/DavidGutierrez94/streampay-402#readme" target="_blank">Read the docs</a></div>
         </div>
       )}
       <ul>{log.map((l, i) => <li key={i}>{l.m} {l.tx && <a href={`${EXPL}/tx/${l.tx}`} target="_blank">tx ↗</a>}</li>)}</ul>
@@ -70,21 +76,33 @@ function Flow({ cfg, provider, address, onLogout, label }: { cfg: Cfg; provider:
 }
 
 function PrivyFlow({ cfg }: { cfg: Cfg }) {
-  const { ready, authenticated, login, logout } = usePrivy();
-  const { wallets } = useWallets();
+  const { ready, authenticated, login, logout, user } = usePrivy();
+  const { wallets, ready: wReady } = useWallets();
+  const { createWallet } = useCreateWallet();
   const w = wallets.find((x) => x.walletClientType === "privy") ?? wallets[0];
   const [prov, setProv] = useState<any>(null);
-  useEffect(() => { (async () => { if (w) { await w.switchChain(monadTestnet.id).catch(() => {}); setProv(await w.getEthereumProvider()); } })(); }, [w?.address]);
-  if (!ready) return <p>loading Privy…</p>;
-  if (!authenticated) return <button onClick={login}>Sign up with email (Privy)</button>;
-  if (!w || !prov) return <p>creating your embedded wallet…</p>;
+  const [err, setErr] = useState<string | null>(null);
+  const [slow, setSlow] = useState(false);
+  const [creating, setCreating] = useState(false);
+  useEffect(() => { (async () => { if (!w) return; setErr(null); try { await w.switchChain(monadTestnet.id).catch(() => {}); setProv(await w.getEthereumProvider()); } catch (e: any) { setErr("Could not open your wallet: " + (e?.message ?? e)); } })(); }, [w?.address]);
+  useEffect(() => { setSlow(false); if (authenticated && !prov) { const t = setTimeout(() => setSlow(true), 6000); return () => clearTimeout(t); } }, [authenticated, prov]);
+  const mk = async () => { setCreating(true); setErr(null); try { await createWallet(); } catch (e: any) { setErr("Wallet creation failed: " + (e?.message ?? e) + ". Check that embedded wallets are enabled in the Privy dashboard."); } setCreating(false); };
+  const doLogin = () => { setErr(null); try { login(); } catch (e: any) { setErr("Login failed: " + (e?.message ?? e)); } };
+  if (!ready) return <p className="status">Loading sign-in…</p>;
+  if (!authenticated) return <><p className="step"><b>Step 1 of 3</b> · Sign up or log in with your email. We create a wallet for you.</p><button onClick={doLogin}>Continue with email</button>{err && <p className="err" role="alert">{err}</p>}</>;
+  if (!w || !prov) return (<>
+    <p className="step"><b>Step 2 of 3</b> · Signed in{user?.email?.address ? ` as ${user.email.address}` : ""}. {wReady && !w ? "You don't have a wallet yet." : "Setting up your embedded wallet…"}</p>
+    {(slow || (wReady && !w)) && <button disabled={creating} onClick={mk}>{creating ? "Creating wallet…" : "Create my wallet"}</button>}
+    {err && <p className="err" role="alert">{err}</p>}
+    <button className="link" onClick={logout}>Log out and start over</button>
+  </>);
   return <Flow cfg={cfg} provider={prov} address={w.address as `0x${string}`} onLogout={logout} label="Privy embedded wallet" />;
 }
 
 function InjectedFlow({ cfg }: { cfg: Cfg }) {
   const [addr, setAddr] = useState<`0x${string}`>();
   const eth = (window as any).ethereum;
-  if (!eth) return <p>Privy is not configured (PRIVY_APP_ID) and no browser wallet was found.</p>;
+  if (!eth) return <><p className="err" role="alert">Email sign-up isn't configured on this server and no browser wallet was found.</p><a className="btn" href="/demo">See the live demo instead →</a></>;
   const connect = async () => {
     const [a] = await eth.request({ method: "eth_requestAccounts" });
     await eth.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x279f" }] }).catch(() =>
@@ -96,14 +114,16 @@ function InjectedFlow({ cfg }: { cfg: Cfg }) {
 
 function App() {
   const [cfg, setCfg] = useState<Cfg | null>(null);
-  useEffect(() => { fetch("/api/registry/config").then((r) => r.json()).then(setCfg); }, []);
-  if (!cfg) return <p>loading…</p>;
+  const [cerr, setCerr] = useState<string | null>(null);
+  useEffect(() => { fetch("/api/registry/config").then((r) => r.json()).then(setCfg).catch((e) => setCerr(String(e))); }, []);
+  if (cerr) return <p className="err" role="alert">Couldn't load the registry config: {cerr}. <a href="/onboard">Retry</a></p>;
+  if (!cfg) return <p className="status">Loading…</p>;
   const head = <p className="muted">ServiceRegistry <a href={cfg.registryUrl} target="_blank">{cfg.registry}</a> on Monad testnet</p>;
   if (!cfg.privyAppId) return <>{head}<InjectedFlow cfg={cfg} /></>;
   return (
     <PrivyProvider appId={cfg.privyAppId} config={{
       loginMethods: ["email"], defaultChain: monadTestnet, supportedChains: [monadTestnet],
-      embeddedWallets: { ethereum: { createOnLogin: "users-without-wallets" } }, appearance: { theme: "dark" },
+      embeddedWallets: { ethereum: { createOnLogin: "users-without-wallets" } }, appearance: { theme: "light", accentColor: "#e8461e" },
     }}>{head}<PrivyFlow cfg={cfg} /></PrivyProvider>
   );
 }
