@@ -4,8 +4,8 @@
 <p align="center">StreamPay-402 is per-second billing for anything metered by time (compute, APIs, GPUs, media streams, rentals), built on x402 and Monad. First use case: AI agents paying for services.</p>
 
 <p align="center">
-  <a href="https://calgary-creativity-creations-courier.trycloudflare.com"><b>Live demo</b></a> ·
-  <a href="https://calgary-creativity-creations-courier.trycloudflare.com/onboard"><b>Sign up (/onboard)</b></a> ·
+  <a href="https://streampay.davidgutierrez.ai"><b>Live demo</b></a> ·
+  <a href="https://streampay.davidgutierrez.ai/onboard"><b>Sign up (/onboard)</b></a> ·
   Demo video: <code>TODO_DEMO_VIDEO_URL</code> ·
   Pitch video: <code>TODO_PITCH_VIDEO_URL</code><br>
   Monad Metropolis · Track: <b>Consumer Products &amp; Payments</b> · Monad testnet (chainId 10143)
@@ -23,8 +23,8 @@ Time is what you're actually buying when you pay for compute, APIs, GPUs, media 
 StreamPay-402 bills by the second for anything metered by time. You open a capped escrow stream on Monad and use the service. When you stop, the provider gets exactly `rate × elapsed` and the rest is refunded **in the same transaction**. It plugs into x402 as one new scheme, `stream-per-second`, so it isn't a new protocol. The first use case, and the thing the demo shows, is AI agents paying for services: the agent gets a 402, opens a stream, gets metered output and closes with an instant refund. Providers sign up with email through Privy, register their service onchain and get Stripe-style keys.
 
 ## Try it in 60 seconds
-1. Open the [live demo](https://calgary-creativity-creations-courier.trycloudflare.com).
-2. Go to [/onboard](https://calgary-creativity-creations-courier.trycloudflare.com/onboard) and sign up with email (Privy creates an embedded wallet).
+1. Open the [live demo](https://streampay.davidgutierrez.ai).
+2. Go to [/onboard](https://streampay.davidgutierrez.ai/onboard) and sign up with email (Privy creates an embedded wallet).
 3. Grab the testnet gas drip, then register a service onchain at a per-second rate. Copy your `pk_test_` / `sk_test_` keys.
 4. Open the dashboard and click **Run agent**: watch the 402, the stream open, the per-second cost counter and the close + refund.
 5. Click any tx link to verify it on monadscan.
@@ -103,6 +103,38 @@ Manual audit on Oct 13 2026, full report in [AUDIT.md](AUDIT.md). All High and M
 - Accepted for the demo: L-3 whole-second granularity; `claim` uses a server hot key.
 </details>
 
+## Host on Vercel
+
+Production origin: `https://streampay.davidgutierrez.ai`. The app is a Hono server on Vercel Functions with Fluid compute. `src/index.ts` is the Vercel entry (`maxDuration` 300s, enough for a 60 second stream plus the open, claim, and close transactions). `bun src/server.ts` is still the local server.
+
+1. Import this repo in Vercel. Fluid compute is enabled in `vercel.json`.
+2. Attach the domain `streampay.davidgutierrez.ai`.
+3. In Cloudflare DNS, CNAME `streampay` to the Vercel target (`cname.vercel-dns.com`, or the hostname Vercel shows for the project).
+4. Set `PUBLIC_URL=https://streampay.davidgutierrez.ai` and the variables below. Add Upstash Redis from the Vercel Marketplace so every isolate shares the demo log, stream lock, drip list, run cooldown, and registry cache.
+
+`bun run build` copies `og.png`, the favicons, `theme.css`, and `onboard.js` into `public/` for the CDN. HTML routes stay on the function so the page head can be filled in per request. `/api/infer` and `/api/svc/:id` keep streaming SSE.
+
+## Environment
+
+Required for the hosted demo. Locally, omit the Redis variables and the server uses an in-memory store. Do not commit `.env`.
+
+| Variable | Role |
+|---|---|
+| `PAYER_KEY` | Demo payer key. The in-process agent opens and closes streams, and the testnet gas drip sends from this wallet. |
+| `PAYEE_KEY` | Provider key. `/api/infer` claims accrued earnings with it, inside the streaming request. The agent never reads this. |
+| `PAYEE_ADDRESS` | Payee in the demo 402 terms, and the agent's payee allowlist when `TRUSTED_PAYEES` is unset. |
+| `RPC_URL` | Monad JSON-RPC endpoint. |
+| `ESCROW_ADDRESS` | StreamEscrow v2 address. |
+| `REGISTRY_ADDRESS` | ServiceRegistry address. |
+| `PRIVY_APP_ID` | Email sign-up on `/onboard`. |
+| `PUBLIC_URL` | Absolute origin for canonical, Open Graph, and sitemap URLs. No trailing slash required. |
+| `RATE_PER_SEC` | MON per second for `/api/infer`. Default `0.001`. |
+| `DEMO_TOKEN` | Shared secret for `POST /api/log`. Set it in production so every isolate expects the same token. |
+| `KV_REST_API_URL` or `UPSTASH_REDIS_REST_URL` | Upstash Redis REST URL from the Vercel Marketplace integration. |
+| `KV_REST_API_TOKEN` or `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST token. |
+
+Secret `sk_test_` keys are still shown once in the browser and only their hash is stored onchain. Redis caches registry service reads; it does not store secrets.
+
 ## Run locally
 ```bash
 bun install
@@ -118,11 +150,11 @@ bun src/agent.ts       # or click "Run agent"
 - `RATE_PER_SEC` (default 0.001 MON), `TASK_SECONDS` (default 12), `DEPOSIT_SECONDS` (default 60).
 - Security: `DEMO_TOKEN`, `MAX_RATE_PER_SEC` (0.001), `MAX_DEPOSIT` (0.1 MON), `TRUSTED_PAYEES`, `RUN_COOLDOWN_MS` (30000).
 - Local: `anvil --block-time 1` with `RPC_URL=http://127.0.0.1:8545 CHAIN_ID=31337`.
-- Code map: `contracts/src/StreamEscrow.sol` (escrow + tests), `src/server.ts` (402 terms, onchain checks, metered SSE), `src/agent.ts` (agent client), `web/` (dashboard + onboarding UI).
+- Code map: `contracts/src/StreamEscrow.sol` (escrow + tests), `src/server.ts` (402 terms, onchain checks, metered SSE), `src/store.ts` (shared demo state), `src/index.ts` (Vercel entry), `src/agent.ts` (CLI agent client), `web/` (dashboard + onboarding UI).
 </details>
 
 ## Tech stack
-Solidity + Foundry · Bun + Hono · viem · Privy (`@privy-io/react-auth`, embedded wallets) · x402-style 402 headers · Monad testnet.
+Solidity + Foundry · Bun + Hono on Vercel Fluid compute · Upstash Redis · viem · Privy (`@privy-io/react-auth`, embedded wallets) · x402-style 402 headers · Monad testnet.
 
 ## AI tools disclosure & attribution
 Built during the Metropolis build window with AI assistance, under the author's direction:

@@ -6,9 +6,10 @@ import { streamSSE } from "hono/streaming";
 import { formatEther, verifyMessage } from "viem";
 import { pub, abi } from "./chain";
 import { readService, termsFor } from "./registry";
+import { getStore } from "./store";
 
 const ESCROW = process.env.ESCROW_ADDRESS as `0x${string}`;
-const sessions = new Set<string>();
+const LOCK_TTL_SEC = 90;
 
 export async function readStream(id: bigint) {
   const s = (await pub.readContract({ address: ESCROW, abi, functionName: "streams", args: [id] })) as any[];
@@ -34,13 +35,17 @@ export async function serveMetered(c: Context, serviceId: bigint, produce: Produ
   const sig = c.req.header("X-PAYMENT-SIG") as `0x${string}` | undefined;
   const owner = !!sig && (await verifyMessage({ address: s.payer, message: `x402-stream:${ESCROW.toLowerCase()}:${sid}`, signature: sig }).catch(() => false));
   if (!owner) return c.json({ error: "stream not owned by caller" }, 402);
-  const key = `${serviceId}:${sid}`;
-  if (sessions.has(key)) return c.json({ error: "stream already in use" }, 409);
-  if (!s.active || s.payee.toLowerCase() !== svc.payee.toLowerCase() || s.rate < svc.ratePerSec || s.deposit < svc.ratePerSec * 10n)
+  const lockName = `svc:${serviceId}:${sid}`;
+  const lock = await getStore().tryLock(lockName, LOCK_TTL_SEC);
+  if (!lock) return c.json({ error: "stream already in use" }, 409);
+  if (!s.active || s.payee.toLowerCase() !== svc.payee.toLowerCase() || s.rate < svc.ratePerSec || s.deposit < svc.ratePerSec * 10n) {
+    await getStore().unlock(lockName, lock);
     return c.json({ error: "stream not funded/active for this service", ...terms }, 402);
+  }
   console.log(`[svc ${serviceId}] stream #${sid} verified: ${formatEther(s.deposit)} MON @ ${formatEther(s.rate)} MON/s`);
-  sessions.add(key);
   const endAt = s.start * 1000 + Number((s.deposit * 1000n) / s.rate);
+  c.header("Cache-Control", "no-cache, no-transform");
+  c.header("X-Accel-Buffering", "no");
   return streamSSE(c, async (st) => {
     try {
       let i = 0, last = 0, aborted = false;
@@ -49,12 +54,15 @@ export async function serveMetered(c: Context, serviceId: bigint, produce: Produ
         if (Date.now() >= endAt) { await st.writeSSE({ event: "cutoff", data: "exhausted" }); break; }
         if (Date.now() - last > 1000) {
           last = Date.now();
+          if (!await getStore().refreshLock(lockName, lock, LOCK_TTL_SEC)) {
+            await st.writeSSE({ event: "cutoff", data: "lock" }); break;
+          }
           const live = await readStream(BigInt(sid)).catch(() => null);
           if (live && !live.active) { await st.writeSSE({ event: "cutoff", data: "closed" }); break; }
         }
         await st.writeSSE({ event: "token", data: produce(i++) });
         await st.sleep(250);
       }
-    } finally { sessions.delete(key); }
+    } finally { await getStore().unlock(lockName, lock); }
   });
 }
