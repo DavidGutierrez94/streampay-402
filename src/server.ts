@@ -42,11 +42,63 @@ async function readStream(id: bigint) {
 }
 
 const app = new Hono();
-app.get("/", (c) => c.html(Bun.file("web/landing.html").text()));
-app.get("/demo", (c) => c.html(Bun.file("web/index.html").text()));
+// ---- SEO: per-page head tags; absolute URLs from PUBLIC_URL or the request host ----
+const baseUrl = (c: any) => {
+  if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL.replace(/\/+$/, "");
+  const u = new URL(c.req.url);
+  const proto = c.req.header("x-forwarded-proto") ?? u.protocol.replace(":", "");
+  const host = c.req.header("x-forwarded-host") ?? c.req.header("host") ?? u.host;
+  return `${proto}://${host}`;
+};
+const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+type Meta = { path: string; title: string; description: string; jsonLd?: boolean };
+const PAGES: Record<string, Meta> = {
+  landing: { path: "/", title: "StreamPay-402 · Pay only for the time you actually use", jsonLd: true,
+    description: "Pay only for the time you actually use: per-second billing for agents, APIs and compute. Open an escrow stream, pay by the second, get the rest refunded. Built on x402 and Monad." },
+  onboard: { path: "/onboard", title: "Sign up · Bill your API by the second · StreamPay-402",
+    description: "Pay only for the time you actually use: register your agent, API or compute service, set a price per second onchain and get API keys. Email sign-up, no wallet needed." },
+  demo: { path: "/demo", title: "Live demo · An AI agent paying by the second · StreamPay-402",
+    description: "Pay only for the time you actually use: watch an AI agent open an escrow stream on Monad testnet, pay per second for a service and get unused funds refunded." },
+};
+function headTags(base: string, m: Meta) {
+  const url = base + m.path, img = base + "/og.png", t = esc(m.title), d = esc(m.description);
+  let h = `<title>${t}</title>
+<meta name="description" content="${d}">
+<meta name="robots" content="index,follow">
+<link rel="canonical" href="${url}">
+<link rel="icon" href="/favicon.ico" sizes="any"><link rel="icon" type="image/png" href="/favicon.png"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta property="og:type" content="website"><meta property="og:site_name" content="StreamPay-402">
+<meta property="og:title" content="${t}"><meta property="og:description" content="${d}">
+<meta property="og:url" content="${url}"><meta property="og:image" content="${img}">
+<meta property="og:image:width" content="1024"><meta property="og:image:height" content="1024"><meta property="og:image:alt" content="StreamPay-402 logo">
+<meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${t}">
+<meta name="twitter:description" content="${d}"><meta name="twitter:image" content="${img}"><meta name="twitter:image:alt" content="StreamPay-402 logo">`;
+  if (m.jsonLd) h += `\n<script type="application/ld+json">${JSON.stringify({
+    "@context": "https://schema.org", "@type": "SoftwareApplication", name: "StreamPay-402", url,
+    applicationCategory: "FinanceApplication", operatingSystem: "Web", image: img, description: m.description,
+    offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+    featureList: ["Per-second billing", "x402 HTTP payments", "Onchain escrow streams on Monad", "Automatic refunds", "API keys"],
+  })}</script>`;
+  return h;
+}
+const page = (file: string, key: string) => async (c: any) =>
+  c.html((await Bun.file(file).text()).replace("<!--SEO-->", headTags(baseUrl(c), PAGES[key])));
+const png = (f: string) => () => new Response(Bun.file(f), { headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" } });
+app.get("/og.png", png("web/og.png"));
+app.get("/favicon.png", png("web/favicon.png"));
+app.get("/apple-touch-icon.png", png("web/apple-touch-icon.png"));
+app.get("/favicon.ico", () => new Response(Bun.file("web/favicon.ico"), { headers: { "content-type": "image/x-icon" } }));
+app.get("/robots.txt", (c) => c.text(`User-agent: *\nAllow: /\nDisallow: /api/\n\nSitemap: ${baseUrl(c)}/sitemap.xml\n`));
+app.get("/sitemap.xml", (c) => {
+  const b = baseUrl(c), d = new Date().toISOString().slice(0, 10);
+  const urls = Object.values(PAGES).map((m) => `<url><loc>${b}${m.path}</loc><lastmod>${d}</lastmod><priority>${m.path === "/" ? "1.0" : "0.8"}</priority></url>`).join("");
+  return c.body(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls}</urlset>`, 200, { "content-type": "application/xml" });
+});
+app.get("/", page("web/landing.html", "landing"));
+app.get("/demo", page("web/index.html", "demo"));
 app.get("/theme.css", () => new Response(Bun.file("web/theme.css"), { headers: { "content-type": "text/css" } }));
 app.route("/api/registry", registry);   // onboarding: ServiceRegistry + pk_/sk_ keys
-app.get("/onboard", (c) => c.html(Bun.file("web/onboard.html").text()));
+app.get("/onboard", page("web/onboard.html", "onboard"));
 app.get("/onboard.js", () => new Response(Bun.file("web/onboard.js"), { headers: { "content-type": "text/javascript" } }));
 // Any service registered via /onboard is immediately callable here, metered per second
 app.get("/api/svc/:id", (c) => {
