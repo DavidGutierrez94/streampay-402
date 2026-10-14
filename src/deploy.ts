@@ -1,3 +1,4 @@
+// Deploys StreamEscrow v2 only. Spend caps on chain live in StreamEscrowV3, which is not deployed — see README.
 import type { Hex } from "viem";
 import artifact from "../contracts/out/StreamEscrow.sol/StreamEscrow.json";
 import { pub, wallet, abi, addrUrl, txUrl } from "./chain";

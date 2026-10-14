@@ -69,6 +69,33 @@ describe("memory store", () => {
     expect(await store.tryStartRun(30_000, 300, 40_000)).toEqual({ ok: true });
   });
 
+  test("receipt, stop flag, policy, webhook, and dashboard cache round-trip", async () => {
+    let t = 5_000;
+    const store = createMemoryStore(() => t);
+    const receipt = { secondsUsed: 3, paid: "1", refunded: "2", tx: "0xabc", txUrl: "https://example/tx", chainId: 10143 };
+    await store.setReceipt(receipt);
+    await store.setAgentStop({ stop: true, closing: true });
+    expect(await store.getReceipt()).toEqual(receipt);
+    expect(await store.getAgentStop()).toEqual({ stop: true, closing: true });
+    const saved = await store.withPolicy((blob) => {
+      blob.policies.key = { maxTotalSpend: "5", maxRatePerSec: null, maxSessionDuration: 2 };
+      blob.ledgers.key = { spent: "1", reserved: "4" };
+      return blob.policies.key.maxTotalSpend;
+    });
+    expect(saved).toBe("5");
+    expect((await store.withPolicy((blob) => blob.ledgers.key)).reserved).toBe("4");
+    await store.putWebhook("7", { url: "https://hooks.example/streampay", secret: "x".repeat(16), enabled: true, maxAttempts: 4 });
+    expect((await store.getWebhook("7"))?.url).toBe("https://hooks.example/streampay");
+    await store.setDashboard("0xabc", { snapshot: { address: "0xabc" } }, 20);
+    expect(await store.getDashboard("0xabc")).toEqual({ snapshot: { address: "0xabc" } });
+    t += 20_000;
+    expect(await store.getDashboard("0xabc")).toBeNull();
+    await store.clearDemo();
+    expect(await store.getReceipt()).toBeNull();
+    expect(await store.getAgentStop()).toEqual({ stop: false, closing: false });
+    expect(await store.getWebhook("7")).not.toBeNull();
+  });
+
   test("registry service cache expires", async () => {
     let t = 1_000;
     const store = createMemoryStore(() => t);
@@ -142,6 +169,16 @@ describe("redis adapter", () => {
     expect(await store.tryDrip("0xabc", 100)).toBe("ok");
     expect(await store.tryStartRun(30_000, 300, 5)).toEqual({ ok: false, msg: "agent already running" });
     expect(await store.recentEvents(40)).toEqual([{ t: 1, kind: "open", msg: "hi" }]);
+    await store.setReceipt({ secondsUsed: 1, paid: "1", refunded: "0", tx: "0x1", txUrl: "u", chainId: 1 });
+    await store.setAgentStop({ stop: true, closing: false });
+    await store.putWebhook("7", { url: "https://hooks.example", secret: "secret-secret-secret", enabled: true, maxAttempts: 3 });
+    await store.setDashboard("0xabc", { snapshot: true }, 20);
+    await store.withPolicy((blob) => { blob.policies.k = { maxTotalSpend: null, maxRatePerSec: null, maxSessionDuration: null }; });
+    expect(calls.some((c) => c.op === "set" && c.args[0] === "sp:v1:receipt")).toBe(true);
+    expect(calls.some((c) => c.op === "set" && c.args[0] === "sp:v1:stop")).toBe(true);
+    expect(calls.some((c) => c.op === "set" && c.args[0] === "sp:v1:hook:7")).toBe(true);
+    expect(calls.some((c) => c.op === "set" && c.args[0] === "sp:v1:dash:0xabc")).toBe(true);
+    expect(calls.some((c) => c.op === "set" && c.args[0] === "sp:v1:policy")).toBe(true);
     await store.finishRun();
     expect(calls.some((c) => c.op === "del" && c.args[0] === "sp:v1:running")).toBe(true);
   });

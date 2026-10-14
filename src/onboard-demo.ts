@@ -23,8 +23,9 @@ console.log("verifyKey(sk):", await pub.readContract({ address: REGISTRY, abi: r
 const has = await pub.readContract({ address: REGISTRY, abi: registryAbi, functionName: "agentOf", args: [agentW.account.address] });
 if (has === 0n) await send(agentW, REGISTRY, registryAbi, "registerAgent", ["demo-agent"]); else console.log("agent already registered, id", Number(has) - 1);
 // 3. agent discovers terms using pk_ only, then is charged per second via StreamEscrow
-const t = termsFor(id, await readService(id)).accepts[0];
-const rate = BigInt(t.ratePerSec), deposit = rate * 20n;
+const t = (await termsFor(id, await readService(id))).accepts[0];
+if (!t) throw new Error("registry returned no stream-per-second terms");
+const rate = BigInt(t.extra.ratePerSec), deposit = rate * 20n;
 const r3 = await send(agentW, ESCROW, escrowAbi, "open", [t.payTo, rate], deposit);
 const sid = ev(r3, escrowAbi, "Opened").id as bigint;
 console.log(`stream #${sid} @ ${formatEther(rate)} MON/s, deposit ${formatEther(deposit)}`);

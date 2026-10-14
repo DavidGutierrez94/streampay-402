@@ -7,8 +7,10 @@ export type WebName =
   | "landing.html"
   | "index.html"
   | "onboard.html"
+  | "dashboard.html"
   | "theme.css"
   | "onboard.js"
+  | "dashboard.js"
   | "og.png"
   | "favicon.png"
   | "apple-touch-icon.png"
@@ -52,10 +54,14 @@ async function load(name: WebName): Promise<Uint8Array> {
       return readStatic(new URL("../web/index.html", import.meta.url), name);
     case "onboard.html":
       return readStatic(new URL("../web/onboard.html", import.meta.url), name);
+    case "dashboard.html":
+      return readStatic(new URL("../web/dashboard.html", import.meta.url), name);
     case "theme.css":
       return readStatic(new URL("../web/theme.css", import.meta.url), name);
     case "onboard.js":
       return readStatic(new URL("../web/onboard.js", import.meta.url), name);
+    case "dashboard.js":
+      return readStatic(new URL("../web/dashboard.js", import.meta.url), name);
     case "og.png":
       return readStatic(new URL("../web/og.png", import.meta.url), name);
     case "favicon.png":

@@ -51,7 +51,25 @@ describe.serial("http", () => {
     const robots = await app.request("http://localhost/robots.txt");
     expect(await robots.text()).toContain("Disallow: /api/");
     const sitemap = await app.request("http://localhost/sitemap.xml");
-    expect(await sitemap.text()).toContain("/onboard");
+    const sitemapXml = await sitemap.text();
+    expect(sitemapXml).toContain("/onboard");
+    expect(sitemapXml).toContain("/dashboard");
+    const dashboard = await app.request("/dashboard");
+    expect(dashboard.status).toBe(200);
+    expect(await dashboard.text()).toContain("dashboard.js");
+    const dashJs = await app.request("/dashboard.js");
+    expect(dashJs.headers.get("content-type")).toBe("text/javascript");
+
+    const addr = "0x" + "ab".repeat(20);
+    expect((await app.request(`/api/dashboard/${addr}`)).status).toBe(204);
+    const put = await app.request(`/api/dashboard/${addr}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ snapshot: { address: addr }, activity: null }),
+    });
+    expect(put.status).toBe(200);
+    const cached = await (await app.request(`/api/dashboard/${addr}`)).json() as { snapshot: { address: string } };
+    expect(cached.snapshot.address).toBe(addr);
   });
 
   test("infer without payment is 402 and the log route is token gated", async () => {

@@ -52,8 +52,25 @@ export async function runDemoAgent(app: FetchApp, report: DemoReport) {
   await report("open", `opened stream #${streamId} with ${formatEther(deposit)} MON deposit`, openHash);
 
   let closed = false;
+  let stop = false;
+  let watching = true;
+  const agentStop = async () => {
+    const res = await app.request("/api/agent-stop").catch(() => null);
+    if (!res?.ok) return { stop: false, closing: false };
+    const body = await res.json().catch(() => ({})) as { stop?: boolean; closing?: boolean };
+    return { stop: !!body.stop, closing: !!body.closing };
+  };
+  const streamInactive = async () => {
+    const row = await pub.readContract({ address: TRUSTED_ESCROW, abi, functionName: "streams", args: [streamId] }).catch(() => null) as unknown[] | null;
+    return !!row && BigInt((row[5] as bigint | number | undefined) ?? 0) !== 0n;
+  };
   const closeNow = async () => {
     if (closed) return;
+    const gate = await agentStop();
+    if ((stop || gate.stop) && gate.closing) {
+      for (let i = 0; i < 80 && !(await streamInactive()); i++) await sleep(250);
+    }
+    if (await streamInactive()) { closed = true; return; }
     closed = true;
     const closeHash = await w.writeContract({ address: TRUSTED_ESCROW, abi, functionName: "close", args: [streamId], gas: 200000n });
     const cr = await pub.waitForTransactionReceipt({ hash: closeHash });
@@ -76,9 +93,17 @@ export async function runDemoAgent(app: FetchApp, report: DemoReport) {
     if (!r2 || r2.status !== 200) throw new Error("server rejected stream: " + (await r2?.text()));
     const reader = r2.body?.getReader();
     if (!reader) throw new Error("stream body missing");
+    const watch = (async () => {
+      while (watching && !stop) {
+        const gate = await agentStop();
+        if (gate.stop) { stop = true; await reader.cancel().catch(() => {}); return; }
+        await sleep(250);
+      }
+    })();
+    void watch;
     const dec = new TextDecoder();
     const t0 = Date.now();
-    while (Date.now() - t0 < TASK_SECONDS * 1000) {
+    while (!stop && Date.now() - t0 < TASK_SECONDS * 1000) {
       const { value, done } = await reader.read();
       if (done) break;
       for (const m of dec.decode(value).matchAll(/event: token\ndata: (.*)/g)) {
@@ -87,8 +112,10 @@ export async function runDemoAgent(app: FetchApp, report: DemoReport) {
       }
     }
     await reader.cancel().catch(() => {});
-    await report("stop", `task done after ${TASK_SECONDS}s / ${tokens} tokens -> stopping mid-budget`);
+    watching = false;
+    await report("stop", stop ? `stop requested after ${tokens} tokens` : `task done after ${TASK_SECONDS}s / ${tokens} tokens -> stopping mid-budget`);
   } finally {
+    watching = false;
     try {
       await closeNow();
     } catch (e) {

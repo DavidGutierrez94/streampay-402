@@ -24,6 +24,32 @@ export type CachedService = {
 export type Lock = { token: string };
 export type DripSlot = "ok" | "dup" | "cap";
 export type StartRun = { ok: true } | { ok: false; msg: string };
+export type StoredReceipt = {
+  secondsUsed: number;
+  paid: string;
+  refunded: string;
+  tx: string;
+  txUrl: string;
+  chainId: number;
+};
+export type AgentStop = { stop: boolean; closing: boolean };
+export type PolicyLimitsJson = {
+  maxTotalSpend: string | null;
+  maxRatePerSec: string | null;
+  maxSessionDuration: number | null;
+};
+export type PolicyBlob = {
+  policies: Record<string, PolicyLimitsJson>;
+  ledgers: Record<string, { spent: string; reserved: string }>;
+  sessions: Record<string, { subjects: string[]; reserved: Record<string, string> }>;
+};
+export type StoredWebhook = { url: string; secret: string; enabled: boolean; maxAttempts: number };
+
+export function emptyPolicy(): PolicyBlob {
+  return { policies: {}, ledgers: {}, sessions: {} };
+}
+
+const idleStop = (): AgentStop => ({ stop: false, closing: false });
 
 export type DemoStore = {
   readonly kind: "memory" | "redis";
@@ -45,6 +71,17 @@ export type DemoStore = {
   finishRun(): Promise<void>;
   getCachedService(id: string): Promise<CachedService | null>;
   setCachedService(id: string, service: CachedService, ttlSec: number): Promise<void>;
+  isRunning(now?: number): Promise<boolean>;
+  getReceipt(): Promise<StoredReceipt | null>;
+  setReceipt(receipt: StoredReceipt | null): Promise<void>;
+  getAgentStop(): Promise<AgentStop>;
+  setAgentStop(flags: AgentStop): Promise<void>;
+  withPolicy<T>(fn: (blob: PolicyBlob) => T): Promise<T>;
+  getWebhook(serviceId: string): Promise<StoredWebhook | null>;
+  putWebhook(serviceId: string, config: StoredWebhook | null): Promise<void>;
+  getDashboard(address: string): Promise<unknown | null>;
+  setDashboard(address: string, value: unknown, ttlSec: number): Promise<void>;
+  resetSessionLocks(): Promise<void>;
 };
 
 type Clock = () => number;
@@ -103,6 +140,12 @@ export function createMemoryStore(clock: Clock = Date.now): DemoStore {
   let runningUntil = 0;
   let lastRun = 0;
   const services = new Map<string, { service: CachedService; expiresAt: number }>();
+  let receipt: StoredReceipt | null = null;
+  let agentStop: AgentStop = idleStop();
+  let policyBlob = emptyPolicy();
+  let policyChain: Promise<unknown> = Promise.resolve();
+  const webhooks = new Map<string, StoredWebhook>();
+  const dashboards = new Map<string, { value: unknown; expiresAt: number }>();
   const nowOf = (now?: number) => now ?? clock();
 
   return {
@@ -131,6 +174,8 @@ export function createMemoryStore(clock: Clock = Date.now): DemoStore {
     async clearDemo() {
       log.length = 0;
       current = null;
+      receipt = null;
+      agentStop = idleStop();
     },
     async tryLock(name, ttlSec, now) {
       const t = nowOf(now);
@@ -192,6 +237,48 @@ export function createMemoryStore(clock: Clock = Date.now): DemoStore {
     async setCachedService(id, service, ttlSec) {
       services.set(id, { service: { ...service }, expiresAt: clock() + ttlSec * 1000 });
     },
+    async isRunning(now) {
+      return runningUntil > nowOf(now);
+    },
+    async getReceipt() {
+      return receipt ? { ...receipt } : null;
+    },
+    async setReceipt(next) {
+      receipt = next ? { ...next } : null;
+    },
+    async getAgentStop() {
+      return { ...agentStop };
+    },
+    async setAgentStop(flags) {
+      agentStop = { stop: flags.stop, closing: flags.closing };
+    },
+    async withPolicy(fn) {
+      const run = policyChain.then(() => fn(policyBlob));
+      policyChain = run.then(() => undefined, () => undefined);
+      return run;
+    },
+    async getWebhook(serviceId) {
+      const hit = webhooks.get(serviceId);
+      return hit ? { ...hit } : null;
+    },
+    async putWebhook(serviceId, config) {
+      if (!config) webhooks.delete(serviceId);
+      else webhooks.set(serviceId, { ...config });
+    },
+    async getDashboard(address) {
+      const hit = dashboards.get(address);
+      if (!hit || hit.expiresAt <= clock()) {
+        if (hit) dashboards.delete(address);
+        return null;
+      }
+      return hit.value;
+    },
+    async setDashboard(address, value, ttlSec) {
+      dashboards.set(address, { value, expiresAt: clock() + ttlSec * 1000 });
+    },
+    async resetSessionLocks() {
+      locks.clear();
+    },
   };
 }
 
@@ -244,6 +331,37 @@ return 'ok'
 const HAS_DRIP = `return redis.call('SISMEMBER', KEYS[1], ARGV[1])`;
 const RELEASE_DRIP = `return redis.call('SREM', KEYS[1], ARGV[1])`;
 
+function asReceipt(raw: unknown): StoredReceipt | null {
+  const v = asJson(raw);
+  if (!isRecord(v) || typeof v.secondsUsed !== "number" || typeof v.paid !== "string" || typeof v.refunded !== "string") return null;
+  if (typeof v.tx !== "string" || typeof v.txUrl !== "string" || typeof v.chainId !== "number") return null;
+  return { secondsUsed: v.secondsUsed, paid: v.paid, refunded: v.refunded, tx: v.tx, txUrl: v.txUrl, chainId: v.chainId };
+}
+
+function asStop(raw: unknown): AgentStop {
+  const v = asJson(raw);
+  if (!isRecord(v) || typeof v.stop !== "boolean" || typeof v.closing !== "boolean") return idleStop();
+  return { stop: v.stop, closing: v.closing };
+}
+
+function asPolicy(raw: unknown): PolicyBlob {
+  const v = asJson(raw);
+  if (!isRecord(v) || !isRecord(v.policies) || !isRecord(v.ledgers) || !isRecord(v.sessions)) return emptyPolicy();
+  return v as PolicyBlob;
+}
+
+function asWebhook(raw: unknown): StoredWebhook | null {
+  const v = asJson(raw);
+  if (!isRecord(v) || typeof v.url !== "string" || typeof v.secret !== "string" || typeof v.enabled !== "boolean") return null;
+  if (typeof v.maxAttempts !== "number") return null;
+  return { url: v.url, secret: v.secret, enabled: v.enabled, maxAttempts: v.maxAttempts };
+}
+
+function asJson(raw: unknown): unknown {
+  if (typeof raw !== "string") return raw;
+  try { return JSON.parse(raw) as unknown; } catch { return raw; }
+}
+
 function redisFromEnv(): Redis | null {
   const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
@@ -282,6 +400,8 @@ export function createRedisStore(redis: RedisLike, clock: Clock = Date.now): Dem
     async clearDemo() {
       await redis.del(k("log"));
       await redis.del(k("current"));
+      await redis.del(k("receipt"));
+      await redis.del(k("stop"));
     },
     async tryLock(name, ttlSec) {
       const token = crypto.randomUUID();
@@ -326,6 +446,56 @@ export function createRedisStore(redis: RedisLike, clock: Clock = Date.now): Dem
     },
     async setCachedService(id, service, ttlSec) {
       await redis.set(k("reg:" + id), service, { ex: ttlSec });
+    },
+    async isRunning() {
+      return (await redis.get(k("running"))) != null;
+    },
+    async getReceipt() {
+      return asReceipt(await redis.get(k("receipt")));
+    },
+    async setReceipt(receipt) {
+      if (!receipt) await redis.del(k("receipt"));
+      else await redis.set(k("receipt"), receipt);
+    },
+    async getAgentStop() {
+      return asStop(await redis.get(k("stop")));
+    },
+    async setAgentStop(flags) {
+      await redis.set(k("stop"), flags);
+    },
+    async withPolicy(fn) {
+      const token = crypto.randomUUID();
+      let locked = false;
+      for (let i = 0; i < 8 && !locked; i++) {
+        const res = await redis.set(k("lock:policy"), token, { nx: true, ex: 5 });
+        if (res === "OK") locked = true;
+        else await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      if (!locked) throw new Error("policy lock");
+      try {
+        const blob = asPolicy(await redis.get(k("policy")));
+        const result = fn(blob);
+        await redis.set(k("policy"), blob);
+        return result;
+      } finally {
+        await redis.eval(UNLOCK, [k("lock:policy")], [token]);
+      }
+    },
+    async getWebhook(serviceId) {
+      return asWebhook(await redis.get(k("hook:" + serviceId)));
+    },
+    async putWebhook(serviceId, config) {
+      if (!config) await redis.del(k("hook:" + serviceId));
+      else await redis.set(k("hook:" + serviceId), config);
+    },
+    async getDashboard(address) {
+      return asJson(await redis.get(k("dash:" + address)));
+    },
+    async setDashboard(address, value, ttlSec) {
+      await redis.set(k("dash:" + address), value, { ex: ttlSec });
+    },
+    async resetSessionLocks() {
+      return undefined;
     },
   };
 }

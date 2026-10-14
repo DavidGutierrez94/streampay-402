@@ -1,14 +1,18 @@
 // x402-style paid endpoint metered per second against an on-chain StreamEscrow.
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { parseEther, formatEther, verifyMessage } from "viem";
-import { pub, abi, txUrl, addrUrl, CHAIN_ID, wallet } from "./chain";
-import { registry } from "./registry";
-import { serveMetered } from "./meter";
+import { parseEther, formatEther, parseEventLogs, verifyMessage } from "viem";
 import { readWeb, readWebText, type WebName } from "./assets";
+import { pub, abi, txUrl, addrUrl, CHAIN_ID, wallet } from "./chain";
+import { runProviderClaim } from "./claim";
 import { defer, sleep } from "./defer";
 import { runDemoAgent } from "./demo-agent";
-import { getStore, type DemoStream } from "./store";
+import { serveMetered } from "./meter";
+import { accruedWei, applyEnvPolicy, beginSession, endSession, inferServiceId, policyBlock, publicPolicy } from "./policy";
+import { conservationReceipt, settlementReceipt, type Receipt } from "./receipt";
+import { registry } from "./registry";
+import { getStore, type DemoStream, type StoredReceipt } from "./store";
+import { applyEnvWebhook, emitStreamEvent, streamPayload } from "./webhooks";
 
 const ESCROW = process.env.ESCROW_ADDRESS as `0x${string}`;
 const PAYEE = process.env.PAYEE_ADDRESS as `0x${string}`;
@@ -16,6 +20,7 @@ const RATE = parseEther(process.env.RATE_PER_SEC ?? "0.001"); // MON per second
 const PORT = Number(process.env.PORT ?? 4020);
 const LOCK_TTL_SEC = 90;
 const RUN_TTL_SEC = 300; // matches the Vercel maxDuration; a crashed run releases the gate
+const DASH_TTL_SEC = 20;
 
 const push = async (kind: string, msg: string, link?: string) => {
   console.log(`[${kind}] ${msg} ${link ?? ""}`);
@@ -23,21 +28,27 @@ const push = async (kind: string, msg: string, link?: string) => {
   if (kind === "close") await getStore().markCurrentStopped();
 };
 
-const terms = () => ({
-  x402Version: 1,
-  accepts: [{
-    scheme: "stream-per-second",          // x402 add-on scheme: pay while you use
-    network: `eip155:${CHAIN_ID}`,
-    asset: "native:MON",
-    payTo: PAYEE,
-    escrow: ESCROW,
-    ratePerSec: RATE.toString(),
-    minDeposit: (RATE * 10n).toString(),
-    resource: "/api/infer",
-    description: "LLM-style token stream, billed per second of session time",
-    extra: { open: "StreamEscrow.open(payee, ratePerSec) payable", proofHeader: "X-PAYMENT-STREAM: <streamId>" },
-  }],
-});
+const terms = async () => {
+  const policy = await publicPolicy({ kind: "key", serviceId: inferServiceId() });
+  return {
+    x402Version: 1,
+    accepts: [{
+      scheme: "stream-per-second",
+      network: `eip155:${CHAIN_ID}`,
+      asset: "native:MON",
+      payTo: PAYEE,
+      escrow: ESCROW,
+      ratePerSec: RATE.toString(),
+      minDeposit: (RATE * 10n).toString(),
+      resource: "/api/infer",
+      description: "LLM-style token stream, billed per second of session time",
+      extra: {
+        open: "StreamEscrow.open(payee, ratePerSec) payable", proofHeader: "X-PAYMENT-STREAM: <streamId>",
+        ...(policy ? { policy } : {}),
+      },
+    }],
+  };
+};
 
 async function readStream(id: bigint) {
   const s = (await pub.readContract({ address: ESCROW, abi, functionName: "streams", args: [id] })) as any[];
@@ -54,15 +65,25 @@ const errText = (e: unknown, fallback: string) => {
   return fallback;
 };
 
-// M-4: at most one provider claim per stream id, across isolates.
-async function claimOnce(id: bigint, sid: string) {
+function asReceipt(stored: StoredReceipt): Receipt {
+  return { ...stored, tx: stored.tx as `0x${string}` };
+}
+
+// One provider claim per stream id, on this request, then a stream.claimed webhook.
+async function claimOnce(id: bigint, sid: string, meta: { payer: string; rate: bigint; deposit: bigint }) {
   const key = process.env.PAYEE_KEY;
   if (!key) return;
   if (!await getStore().tryMarkClaimed(sid)) return;
   try {
-    const h = await wallet(key).writeContract({ address: ESCROW, abi, functionName: "claim", args: [id], gas: 120000n });
-    const r = await pub.waitForTransactionReceipt({ hash: h });
-    await push("claim", `provider claimed accrued earnings mid-stream (${r.status})`, txUrl(h));
+    const result = await runProviderClaim({
+      serviceId: inferServiceId(),
+      streamId: id,
+      payee: PAYEE,
+      claimKey: key,
+      meta: { payer: meta.payer, ratePerSec: meta.rate, deposit: meta.deposit },
+    });
+    if (result?.status === "success") await push("claim", `provider claimed accrued earnings mid-stream (${formatEther(result.amount)} MON)`, txUrl(result.hash));
+    else await push("claim", "claim failed");
   } catch (e: unknown) {
     await push("claim", "claim failed: " + errText(e, "error"));
   }
@@ -74,7 +95,6 @@ function sseHeaders(c: { header: (name: string, value: string) => void }) {
 }
 
 export const app = new Hono();
-// ---- SEO: per-page head tags; absolute URLs from PUBLIC_URL or the request host ----
 const baseUrl = (c: any) => {
   if (process.env.PUBLIC_URL) return process.env.PUBLIC_URL.replace(/\/+$/, "");
   const u = new URL(c.req.url);
@@ -90,7 +110,9 @@ const PAGES: Record<string, Meta> = {
   onboard: { path: "/onboard", title: "Sign up · Bill your API by the second · StreamPay-402",
     description: "Pay only for the time you actually use: register your agent, API or compute service, set a price per second onchain and get API keys. Email sign-up, no wallet needed." },
   demo: { path: "/demo", title: "Live demo · An AI agent paying by the second · StreamPay-402",
-    description: "Pay only for the time you actually use: watch an AI agent open an escrow stream on Monad testnet, pay per second for a service and get unused funds refunded." },
+    description: "Pay only for the time you actually use: watch an AI agent open an escrow stream on Monad testnet, stop it whenever you want, and get a receipt for the seconds used, the amount paid, and the unused escrow refunded." },
+  dashboard: { path: "/dashboard", title: "Dashboard · Services, streams, and payouts · StreamPay-402",
+    description: "Pay only for the time you actually use: see the services, active and closed streams, claimed earnings, and payouts for the wallet you signed in with. Read on Monad testnet." },
 };
 function headTags(base: string, m: Meta) {
   const url = base + m.path, img = base + "/og.png", t = esc(m.title), d = esc(m.description);
@@ -133,41 +155,66 @@ app.get("/sitemap.xml", (c) => {
 app.get("/", page("landing.html", "landing"));
 app.get("/demo", page("index.html", "demo"));
 app.get("/theme.css", asset("theme.css", "text/css"));
-app.route("/api/registry", registry);   // onboarding: ServiceRegistry + pk_/sk_ keys
+app.route("/api/registry", registry);
 app.get("/onboard", page("onboard.html", "onboard"));
 app.get("/onboard.js", asset("onboard.js", "text/javascript"));
-// Any service registered via /onboard is immediately callable here, metered per second
-app.get("/api/svc/:id", (c) => {
-  const raw = c.req.param("id"); const m = /^(?:pk_test_)?(\d{1,20})$/.exec(raw);
-  if (!m?.[1]) return c.json({ error: "bad service id" }, 400);
-  return serveMetered(c, BigInt(m[1]));
+app.get("/dashboard", page("dashboard.html", "dashboard"));
+app.get("/dashboard.js", asset("dashboard.js", "text/javascript"));
+app.get("/api/dashboard/:address", async (c) => {
+  const address = c.req.param("address").toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(address)) return c.json({ error: "bad address" }, 400);
+  const hit = await getStore().getDashboard(address);
+  if (!hit) return c.body(null, 204);
+  return c.json(hit);
 });
-app.get("/api/terms", (c) => c.json(terms()));
+app.put("/api/dashboard/:address", async (c) => {
+  const address = c.req.param("address").toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(address)) return c.json({ error: "bad address" }, 400);
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== "object" || !("snapshot" in body)) return c.json({ error: "bad json" }, 400);
+  await getStore().setDashboard(address, body, DASH_TTL_SEC);
+  return c.json({ ok: true });
+});
+app.get("/api/svc/:id", async (c) => {
+  const raw = c.req.param("id");
+  const id = /^(?:pk_test_)?(\d{1,20})$/.exec(raw)?.[1];
+  if (!id) return c.json({ error: "bad service id" }, 400);
+  return serveMetered(c, BigInt(id));
+});
+app.get("/api/terms", async (c) => c.json(await terms()));
 
 export const DEMO_TOKEN = process.env.DEMO_TOKEN ?? crypto.randomUUID();
 
 app.get("/api/infer", async (c) => {
   const sid = c.req.header("X-PAYMENT-STREAM");
+  const offered = await terms();
   if (!sid) {
-    c.header("X-PAYMENT-REQUIRED", Buffer.from(JSON.stringify(terms())).toString("base64"));
+    c.header("X-PAYMENT-REQUIRED", Buffer.from(JSON.stringify(offered)).toString("base64"));
     await push("402", "agent hit /api/infer without payment -> 402 Payment Required with stream terms");
-    return c.json(terms(), 402);
+    return c.json(offered, 402);
   }
-  if (!/^\d{1,78}$/.test(sid)) return c.json({ error: "bad stream id" }, 400);   // L-4
+  if (!/^\d{1,78}$/.test(sid)) return c.json({ error: "bad stream id" }, 400);
   const id = BigInt(sid);
   const s = await readStream(id).catch(() => null);
-  if (!s) return c.json({ error: "cannot verify stream (RPC)" }, 503);           // M-2 fail closed
-  // H-2: caller must prove it is the stream's payer
+  if (!s) return c.json({ error: "cannot verify stream (RPC)" }, 503);
   const sig = c.req.header("X-PAYMENT-SIG") as `0x${string}` | undefined;
   const owner = !!sig && (await verifyMessage({ address: s.payer, message: `x402-stream:${ESCROW.toLowerCase()}:${sid}`, signature: sig }).catch(() => false));
   if (!owner) { await push("reject", `stream #${sid}: missing/invalid payer signature`); return c.json({ error: "stream not owned by caller" }, 402); }
   const lockName = `infer:${sid}`;
   const lock = await getStore().tryLock(lockName, LOCK_TTL_SEC);
   if (!lock) return c.json({ error: "stream already in use" }, 409);
-  if (!s.active || s.payee.toLowerCase() !== PAYEE.toLowerCase() || s.rate < RATE || s.deposit < RATE * 10n) {  // L-2 minDeposit
+  if (!s.active || s.payee.toLowerCase() !== PAYEE.toLowerCase() || s.rate < RATE || s.deposit < RATE * 10n) {
     await getStore().unlock(lockName, lock);
     await push("reject", `stream ${sid} not acceptable (active=${s.active})`);
-    return c.json({ error: "stream not funded/active", ...terms() }, 402);
+    return c.json({ error: "stream not funded/active", ...offered }, 402);
+  }
+  const opened = await beginSession({
+    serviceId: inferServiceId(), payer: s.payer, streamId: sid, rate: s.rate, deposit: s.deposit, startSec: s.start, nowMs: Date.now(),
+  });
+  if (!opened.ok) {
+    await getStore().unlock(lockName, lock);
+    await push("reject", `stream #${sid}: ${opened.error}`);
+    return c.json({ error: opened.error, ...offered }, opened.status);
   }
   const base: DemoStream = { id: sid, ratePerSec: formatEther(s.rate), deposit: formatEther(s.deposit), start: s.start * 1000, tokens: 0 };
   try {
@@ -177,9 +224,24 @@ app.get("/api/infer", async (c) => {
     await getStore().unlock(lockName, lock);
     throw err;
   }
+  const grant = opened.grant;
+  const hookBase = { streamId: sid, payer: s.payer, payee: s.payee, ratePerSec: s.rate, deposit: s.deposit };
+  emitStreamEvent(inferServiceId(), { type: "stream.opened", data: streamPayload(hookBase) });
   const words = "the agent is renting inference by the second and every token you see is metered against a live on chain escrow on monad when the agent stops the meter stops and the unused deposit goes straight back".split(" ");
-  const endAt = s.start * 1000 + Number((s.deposit * 1000n) / s.rate);   // local exhaustion bound (L-2)
+  const endAt = s.start * 1000 + Number((s.deposit * 1000n) / s.rate);
   sseHeaders(c);
+  let settled = false;
+  const finish = async (reason: string) => {
+    if (settled) return;
+    settled = true;
+    const at = Date.now();
+    const actual = accruedWei(s.rate, s.deposit, s.start, at);
+    await endSession(grant.sessionKey, actual);
+    emitStreamEvent(inferServiceId(), {
+      type: "stream.closed",
+      data: streamPayload(hookBase, { amount: actual.toString(), reason, elapsedSeconds: Math.max(0, Math.floor(at / 1000) - s.start) }),
+    });
+  };
   return streamSSE(c, async (st) => {
     let tokens = 0;
     let lastFlush = Date.now();
@@ -190,34 +252,51 @@ app.get("/api/infer", async (c) => {
       const next: DemoStream = stopped === undefined ? { ...base, tokens } : { ...base, tokens, stopped };
       try { await getStore().updateCurrent(sid, next); } catch (e: unknown) { console.log("[state]", errText(e, "current write failed")); }
     };
-    // Claim inside this request, 5s after the stream starts, and always before the handler returns.
     const armClaim = () => {
       if (claimP || !process.env.PAYEE_KEY) return;
       const delay = Math.max(0, claimAt - Date.now());
-      claimP = sleep(delay).then(() => claimOnce(id, sid));
+      claimP = sleep(delay).then(() => claimOnce(id, sid, { payer: s.payer, rate: s.rate, deposit: s.deposit }));
     };
+    let reason = "ended";
     try {
       let i = 0, lastCheck = 0, fails = 0;
       let aborted = false;
-      st.onAbort(() => { aborted = true; });
+      st.onAbort(() => { aborted = true; reason = "aborted"; });
       while (!aborted) {
         if (Date.now() >= claimAt) armClaim();
+        const policyReason = policyBlock(grant, Date.now());
+        if (policyReason) {
+          reason = policyReason;
+          await push("cutoff", `stream #${sid} ${policyReason} -> service cut off`);
+          await st.writeSSE({ event: "cutoff", data: policyReason });
+          break;
+        }
         if (Date.now() >= endAt) {
+          reason = "exhausted";
           await push("cutoff", `stream #${sid} balance exhausted -> service cut off`);
-          await st.writeSSE({ event: "cutoff", data: "exhausted" }); break;
+          await st.writeSSE({ event: "cutoff", data: "exhausted" });
+          break;
         }
         if (Date.now() - lastCheck > 1000) {
           lastCheck = Date.now();
           if (!await getStore().refreshLock(lockName, lock, LOCK_TTL_SEC)) {
+            reason = "lock";
             await push("cutoff", `stream #${sid} session lock lost -> service cut off`);
-            await st.writeSSE({ event: "cutoff", data: "lock" }); break;
+            await st.writeSSE({ event: "cutoff", data: "lock" });
+            break;
           }
           const live = await readStream(id).catch(() => null);
           fails = live ? 0 : fails + 1;
-          if (fails >= 3) { await push("cutoff", `stream #${sid} unverifiable (RPC) -> cut off`); await st.writeSSE({ event: "cutoff", data: "unverifiable" }); break; }
+          if (fails >= 3) {
+            reason = "unverifiable";
+            await push("cutoff", `stream #${sid} unverifiable (RPC) -> cut off`);
+            await st.writeSSE({ event: "cutoff", data: "unverifiable" });
+            break;
+          }
           if (live && !live.active) {
+            reason = live.stoppedAt ? "closed" : "exhausted";
             await push("cutoff", `stream #${sid} ${live.stoppedAt ? "closed by payer" : "balance exhausted"} -> service cut off`);
-            await st.writeSSE({ event: "cutoff", data: live.stoppedAt ? "closed" : "exhausted" });
+            await st.writeSSE({ event: "cutoff", data: reason });
             break;
           }
         }
@@ -231,6 +310,7 @@ app.get("/api/infer", async (c) => {
         armClaim();
         if (claimP) await claimP;
         await flush(Date.now());
+        await finish(reason);
       } finally {
         await getStore().unlock(lockName, lock);
       }
@@ -238,21 +318,122 @@ app.get("/api/infer", async (c) => {
   });
 });
 
-app.post("/api/log", async (c) => {           // agent reports its own tx hashes; token-protected (M-3)
+function receiptFromClose(hash: `0x${string}`, logs: any, stoppedAt: bigint, snap: { rate: bigint; deposit: bigint; start: number }): Receipt | null {
+  const ev = parseEventLogs({ abi, logs, eventName: "Closed" })[0] as
+    | { args: { paidToPayee: bigint; refunded: bigint } }
+    | undefined;
+  if (!ev || snap.start <= 0) return null;
+  const common = {
+    deposit: snap.deposit,
+    start: BigInt(snap.start),
+    stoppedAt,
+    refunded: ev.args.refunded,
+    tx: hash,
+    chainId: CHAIN_ID,
+  };
+  return settlementReceipt({ ...common, ratePerSec: snap.rate, paidToPayee: ev.args.paidToPayee })
+    ?? conservationReceipt(common);
+}
+
+async function receiptFromTx(hash: `0x${string}`): Promise<Receipt | null> {
+  const cr = await pub.getTransactionReceipt({ hash });
+  if (cr.status !== "success") return null;
+  const ev = parseEventLogs({ abi, logs: cr.logs, eventName: "Closed" })[0] as { args: { id: bigint } } | undefined;
+  if (!ev) return null;
+  const block = await pub.getBlock({ blockNumber: cr.blockNumber });
+  let s = await readStream(ev.args.id).catch(() => null);
+  for (let i = 0; s && !s.stoppedAt && i < 4; i++) {
+    await sleep(400);
+    s = await readStream(ev.args.id).catch(() => null);
+  }
+  if (!s) return null;
+  const stoppedAt = s.stoppedAt ? BigInt(s.stoppedAt) : block.timestamp;
+  return receiptFromClose(hash, cr.logs, stoppedAt, s);
+}
+
+async function publishReceipt(built: Receipt) {
+  await getStore().setReceipt(built);
+  await getStore().markCurrentStopped();
+  const log = await getStore().recentEvents(40);
+  if (!log.some((e) => e.kind === "close")) {
+    await push("close", `closed: paid ${built.paid} MON to provider, refunded ${built.refunded} MON instantly`, built.txUrl);
+  }
+}
+
+app.post("/api/log", async (c) => {
   if (c.req.header("x-demo-token") !== DEMO_TOKEN) return c.json({ ok: false }, 403);
   const b = await c.req.json().catch(() => ({}));
-  const hash = /^0x[0-9a-fA-F]{64}$/.test(b.hash ?? "") ? b.hash : undefined;
+  const hash = /^0x[0-9a-fA-F]{64}$/.test(b.hash ?? "") ? b.hash as `0x${string}` : undefined;
   const kind = String(b.kind ?? "").slice(0, 16);
   await push(kind, String(b.msg ?? "").slice(0, 300), hash && txUrl(hash));
+  if (kind === "close" && hash && !await getStore().getReceipt()) {
+    const built = await receiptFromTx(hash).catch(() => null);
+    if (built) await getStore().setReceipt(built);
+  }
   return c.json({ ok: true });
 });
-app.get("/api/state", async (c) => c.json({
-  escrow: ESCROW,
-  escrowUrl: addrUrl(ESCROW),
-  rate: formatEther(RATE),
-  current: await getStore().getCurrent(),
-  log: await getStore().recentEvents(40),
-}));
+app.get("/api/state", async (c) => {
+  const stored = await getStore().getReceipt();
+  return c.json({
+    escrow: ESCROW,
+    escrowUrl: addrUrl(ESCROW),
+    rate: formatEther(RATE),
+    current: await getStore().getCurrent(),
+    running: await getStore().isRunning(),
+    receipt: stored ? asReceipt(stored) : null,
+    log: await getStore().recentEvents(40),
+  });
+});
+
+async function closeActiveStream(): Promise<Receipt | null> {
+  const current = await getStore().getCurrent();
+  if (!current || current.stopped || !process.env.PAYER_KEY || !ESCROW) return null;
+  const id = BigInt(current.id);
+  const before = await readStream(id).catch(() => null);
+  if (!before || before.stoppedAt) return null;
+  const hash = await wallet(process.env.PAYER_KEY).writeContract({
+    address: ESCROW, abi, functionName: "close", args: [id], gas: 200000n,
+  });
+  const cr = await pub.waitForTransactionReceipt({ hash });
+  if (cr.status !== "success") return null;
+  const block = await pub.getBlock({ blockNumber: cr.blockNumber });
+  return receiptFromClose(hash, cr.logs, block.timestamp, before);
+}
+
+let stopWait: Promise<Receipt | null> | null = null;
+
+async function performStop(): Promise<Receipt | null> {
+  const current = await getStore().getCurrent();
+  const willClose = !!(current && !current.stopped && process.env.PAYER_KEY);
+  await getStore().setAgentStop({ stop: true, closing: willClose });
+  const deadline = Date.now() + 45_000;
+  let triedClose = false;
+  try {
+    while (Date.now() < deadline) {
+      const stored = await getStore().getReceipt();
+      if (stored) return asReceipt(stored);
+      if (!triedClose && willClose) {
+        triedClose = true;
+        try {
+          const built = await closeActiveStream();
+          if (built) { await publishReceipt(built); return built; }
+        } catch (e) {
+          console.log("[stop] close failed", errText(e, "close failed").slice(0, 180));
+        }
+      }
+      const live = await getStore().getCurrent();
+      if (!await getStore().isRunning() && !live) return null;
+      await sleep(200);
+    }
+    const stored = await getStore().getReceipt();
+    return stored ? asReceipt(stored) : null;
+  } finally {
+    const flags = await getStore().getAgentStop();
+    await getStore().setAgentStop({ stop: flags.stop, closing: false });
+  }
+}
+
+app.get("/api/agent-stop", async (c) => c.json(await getStore().getAgentStop()));
 
 const COOLDOWN_MS = Number(process.env.RUN_COOLDOWN_MS ?? 30_000);
 app.post("/api/run-agent", async (c) => {
@@ -261,14 +442,32 @@ app.post("/api/run-agent", async (c) => {
   await getStore().clearDemo();
   const job = runDemoAgent(app, async (kind, msg, hash) => {
     await push(kind, msg, hash ? txUrl(hash) : undefined);
+    if (kind === "close" && hash && /^0x[0-9a-fA-F]{64}$/.test(hash) && !await getStore().getReceipt()) {
+      const built = await receiptFromTx(hash as `0x${string}`).catch(() => null);
+      if (built) await getStore().setReceipt(built);
+    }
   }).catch((err: unknown) => push("error", errText(err, "agent failed").slice(0, 300)))
     .finally(() => getStore().finishRun());
   defer(job);
   return c.json({ ok: true });
 });
 
-// Bun serves this default export for `bun src/server.ts` (idleTimeout covers a 60s stream).
-// Vercel uses src/index.ts, which exports `app` itself.
+app.post("/api/stop-agent", async (c) => {
+  const stored = await getStore().getReceipt();
+  if (stored) return c.json({ ok: true, receipt: asReceipt(stored) });
+  const current = await getStore().getCurrent();
+  if (!await getStore().isRunning() && !current) return c.json({ ok: false, msg: "No active stream" }, 409);
+  if (!stopWait) stopWait = performStop().finally(() => { stopWait = null; });
+  const built = await stopWait;
+  const latest = await getStore().getReceipt();
+  if (built || latest) return c.json({ ok: true, receipt: built ?? (latest ? asReceipt(latest) : null) });
+  const running = await getStore().isRunning();
+  return c.json({ ok: false, msg: running ? "Close is still confirming" : "Agent stopped before a stream was open" }, running ? 504 : 409);
+});
+
+void applyEnvPolicy();
+void applyEnvWebhook();
+
 export default { port: PORT, fetch: app.fetch, idleTimeout: 120 };
 const launchedAsServer = (process.argv[1] ?? "").endsWith("server.ts") || (process.argv[1] ?? "").endsWith("server.js");
 if (launchedAsServer) console.log(`streampay-402 server on :${PORT}, escrow ${ESCROW}`);
