@@ -2,6 +2,28 @@
 
 **Pay while you use.** An x402 add-on scheme (`stream-per-second`) for agent services whose cost scales with *time*: GPU/inference sessions, voice minutes, browser sessions, live data feeds, long agent jobs.
 
+**Live demo:** https://calgary-creativity-creations-courier.trycloudflare.com (landing / dashboard) · sign-up: https://calgary-creativity-creations-courier.trycloudflare.com/onboard
+**Videos:** Technical demo: `TODO_DEMO_VIDEO_URL` · Pitch: `TODO_PITCH_VIDEO_URL`
+**Track:** Monad Metropolis, Consumer Products & Payments
+
+## Deployed contracts (Monad testnet, chainId 10143)
+| Contract | Address | Deploy tx |
+|---|---|---|
+| StreamEscrow v2 (audited) | [`0x51ff24a504b2f7446df1767fea43063d7dd525eb`](https://testnet.monadscan.com/address/0x51ff24a504b2f7446df1767fea43063d7dd525eb) | [0x560162f0…67b0](https://testnet.monadscan.com/tx/0x560162f0c520ae4fee2e65e886518bbc032639e4aea144a8e4ad6147dfd567b0) |
+| ServiceRegistry | [`0xdaeddd6a68bbea02c58dd0349797e8847c3fa797`](https://testnet.monadscan.com/address/0xdaeddd6a68bbea02c58dd0349797e8847c3fa797) | [0x8ec2e134…fc75](https://testnet.monadscan.com/tx/0x8ec2e134564dda5a1a3dfd6ed0115aa770ab62c2a2650397a60feba9cf5ffc75) |
+| StreamEscrow v1 (superseded) | `0xda46725e9559d87963349570da491a8f08547d27` | n/a |
+
+## Architecture
+```
+Provider ──Privy email login → embedded wallet──► ServiceRegistry (Monad): registerService(name, rate, payee, keccak(sk))
+                                                    └─► pk_test_<id> / sk_test_… keys
+Agent ──GET /api/infer──► Hono server ──402 + X-PAYMENT-REQUIRED (stream-per-second)──► Agent
+Agent ──open(payee, rate){deposit}──► StreamEscrow (Monad)
+Agent ──retry w/ X-PAYMENT-STREAM + X-PAYMENT-SIG──► server verifies onchain every 1 s, streams SSE, cuts off at exhaustion
+Agent ──close()──► payee gets rate×elapsed, payer refunded in same tx
+```
+Stack: Solidity + Foundry, Bun + Hono, viem, Privy (React SDK, embedded wallets), x402-style 402 headers.
+
 ## Problem
 x402 nails pay-per-request. But time-based services still force a bad choice: prepaid credits (lock-up, leftover balances) or monthly plans (overpay). An agent that rents a GPU for 47 seconds should pay for 47 seconds — and get the rest back the instant it stops.
 
@@ -72,10 +94,15 @@ Local: `anvil --block-time 1` with `RPC_URL=http://127.0.0.1:8545 CHAIN_ID=31337
 ## Attribution
 - [x402](https://x402.org) payment-required handshake (this repo adds a `stream-per-second` scheme on top; no x402 code vendored).
 - [Foundry](https://getfoundry.sh), [viem](https://viem.sh), [Hono](https://hono.dev), [Bun](https://bun.sh).
+- [Privy](https://privy.io) auth + embedded wallets (`@privy-io/react-auth`).
+- [impeccable](https://github.com/pbakaus/impeccable) design skill for Claude Code.
 - Monad testnet network info from [docs.monad.xyz](https://docs.monad.xyz).
 
 ## AI tools disclosure
-Built during the Monad hackathon (Oct 13, 2026) with AI coding assistants (an AI agent wrote most of the code under the author's direction; architecture review with Claude). All code was reviewed and tested by the author.
+Built during the Metropolis build window with AI assistance, under the author's direction:
+- **Grok Bot** (AI agent): wrote most of the code, contracts, deploy scripts and docs.
+- **Claude Code (Opus)**: UI/design pass (with the `impeccable` design skill) and the security audit in [AUDIT.md](AUDIT.md).
+All code was reviewed and tested by the author (David Gutierrez); onchain results are verifiable on monadscan.
 
 ## License
 MIT — see [LICENSE](LICENSE).
