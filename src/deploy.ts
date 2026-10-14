@@ -1,3 +1,4 @@
+// Deploys StreamEscrow v2 only. Spend caps on chain live in StreamEscrowV3, which is not deployed — see README.
 import { pub, wallet, abi, bytecode, addrUrl, txUrl } from "./chain";
 const w = wallet(process.env.PAYER_KEY!);
 const hash = await w.deployContract({ abi, bytecode });

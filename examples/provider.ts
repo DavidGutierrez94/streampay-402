@@ -1,11 +1,13 @@
 // Example provider: your own service, gated + billed per second with StreamPay-402.
 //   PROVIDER_PK=pk_test_<id> PROVIDER_SK=sk_test_... bun run provider
 // Optional PROVIDER_KEY (payee wallet private key) lets it claim earnings mid-stream.
+// Caps and webhooks for this process: POLICY_* and WEBHOOK_* env, or PUT /api/registry/policy and /webhook.
 import { Hono } from "hono";
-import { getAddress } from "viem";
-import { claimStream, paymentRequirements, streamPay } from "@streampay-402/provider";
-import { CHAIN_ID, pub, txUrl, wallet } from "../src/chain";
-import { REGISTRY, hashKey, parsePk, readService, registryAbi } from "../src/registry";
+import { pub } from "../src/chain";
+import { serveMetered } from "../src/meter";
+import { applyEnvPolicy } from "../src/policy";
+import { REGISTRY, registryAbi, hashKey, parsePk, readService, mountBillingAdmin } from "../src/registry";
+import { applyEnvWebhook } from "../src/webhooks";
 
 const pk = process.env.PROVIDER_PK ?? "";
 const sk = process.env.PROVIDER_SK ?? "";
@@ -16,41 +18,16 @@ if (!ok) throw new Error("secret key does not match the onchain hash for " + pk)
 const svc = await readService(id);
 console.log(`provider: sk verified onchain for service #${id} "${svc.name}", payee ${svc.payee}`);
 
-const escrow = getAddress(process.env.ESCROW_ADDRESS!);
-const terms = paymentRequirements({
-  payTo: getAddress(svc.payee),
-  escrow,
-  ratePerSec: svc.ratePerSec,
-  chainId: CHAIN_ID,
-  resourceUrl: "/api/work",
-  description: svc.name,
-  serviceName: svc.name,
-  publishableKey: pk,
-});
+applyEnvPolicy(id.toString());
+applyEnvWebhook(id.toString());
 
 const app = new Hono();
-app.get("/api/work", streamPay({
-  publicClient: pub,
-  escrow,
-  terms,
-  produce: (i) => `result chunk ${i} from ${svc.name}`,
-  onAccept: ({ streamId }) => {
-    const key = process.env.PROVIDER_KEY;
-    if (!key) return;
-    setTimeout(() => {
-      void claimStream({
-        walletClient: wallet(key),
-        publicClient: pub,
-        escrow,
-        streamId: BigInt(streamId),
-      }).then((hash) => {
-        console.log("claim:", txUrl(hash));
-      }).catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        console.log("claim failed:", message);
-      });
-    }, 4000);
-  },
+const admin = new Hono();
+mountBillingAdmin(admin, id);
+app.route("/api/registry", admin);
+app.get("/api/work", (c) => serveMetered(c, id, (i) => `result chunk ${i} from ${svc.name}`, {
+  claimKey: process.env.PROVIDER_KEY,
+  claimDelayMs: 4000,
 }));
 const port = Number(process.env.PROVIDER_PORT ?? 4030);
 Bun.serve({ port, fetch: app.fetch, idleTimeout: 0 });

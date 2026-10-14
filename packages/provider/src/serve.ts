@@ -2,7 +2,7 @@ import type { Address, PublicClient } from "viem";
 import type { PaymentRequirements, StreamView } from "@streampay-402/protocol";
 import { readOnchainStream, type ReadStream } from "./chain";
 import { createGate, type Gate, type GateDecision } from "./gate";
-import { runMeter, type MeterStop, type Produce } from "./meter";
+import { runMeter, type Produce } from "./meter";
 
 export interface OnAccept {
   (info: { streamId: string; stream: StreamView; endAt: number }): void;
@@ -15,6 +15,8 @@ export interface ServeOptions {
   recheckMs?: number;
   now?: () => number;
   onAccept?: OnAccept;
+  /** Cutoff check before each token. A string stops the meter with that reason. */
+  inspect?: () => Promise<string | null> | string | null;
   /** Reuse a gate (one live session per stream). Otherwise one is built from readStream or publicClient. */
   gate?: Gate;
   readStream?: ReadStream;
@@ -76,7 +78,7 @@ export async function meterHeld(
     write: (event: "token" | "cutoff", data: string) => Promise<void>;
     isAborted: () => boolean;
   },
-): Promise<MeterStop> {
+): Promise<string> {
   try {
     options.onAccept?.({ streamId: begun.streamId, stream: begun.stream, endAt: begun.endAt });
     return await runMeter({
@@ -87,6 +89,7 @@ export async function meterHeld(
       tickMs: options.tickMs,
       recheckMs: options.recheckMs,
       now: options.now,
+      inspect: options.inspect,
       sleep: transport.sleep,
       write: transport.write,
       isAborted: transport.isAborted,

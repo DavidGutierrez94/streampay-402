@@ -45,6 +45,7 @@ export type {
   RequirementInput,
   ResourceInfo,
   StreamPayload,
+  PublicSpendPolicy,
   StreamPerSecondExtra,
   StreamView,
 } from "./scheme";

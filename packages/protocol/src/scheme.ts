@@ -33,6 +33,12 @@ export interface ResourceInfo {
   serviceName?: string;
 }
 
+export interface PublicSpendPolicy {
+  maxTotalSpend: string | null;
+  maxRatePerSec: string | null;
+  maxSessionDuration: number | null;
+}
+
 export interface StreamPerSecondExtra {
   paymentFlow: typeof PAYMENT_FLOW;
   assetTransferMethod: typeof ASSET_TRANSFER_METHOD;
@@ -41,6 +47,8 @@ export interface StreamPerSecondExtra {
   minDeposit: string;
   symbol?: string;
   publishableKey?: string;
+  /** Caps echoed on a public 402. Absent when the service has no policy. */
+  policy?: PublicSpendPolicy;
 }
 
 /**
@@ -161,6 +169,17 @@ function normalizeAsset(asset: unknown): string {
   return NATIVE_ASSET;
 }
 
+function readPublicPolicy(value: unknown): PublicSpendPolicy | undefined {
+  if (!isRecord(value)) return undefined;
+  const spend = value.maxTotalSpend;
+  const rate = value.maxRatePerSec;
+  const duration = value.maxSessionDuration;
+  const amount = (item: unknown): item is string | null => item === null || (typeof item === "string" && /^\d+$/.test(item));
+  if (!amount(spend) || !amount(rate)) return undefined;
+  if (duration !== null && (typeof duration !== "number" || !Number.isInteger(duration) || duration < 0)) return undefined;
+  return { maxTotalSpend: spend, maxRatePerSec: rate, maxSessionDuration: duration as number | null };
+}
+
 function normalizeRequirement(raw: unknown): PaymentRequirements {
   if (!isRecord(raw)) throw new SchemeError("invalid_payment_requirements", "accepts entry is not an object");
   if (raw.scheme !== SCHEME) throw new SchemeError("unsupported_scheme", `scheme ${String(raw.scheme)} is not ${SCHEME}`);
@@ -183,6 +202,7 @@ function normalizeRequirement(raw: unknown): PaymentRequirements {
   const maxTimeoutSeconds = typeof timeout === "number" && timeout > 0 ? timeout : DEFAULT_MAX_TIMEOUT_SECONDS;
   const publishableKey = typeof extra.publishableKey === "string" ? extra.publishableKey : undefined;
   const symbol = typeof extra.symbol === "string" ? extra.symbol : "MON";
+  const policy = readPublicPolicy(extra.policy);
   const description = typeof raw.description === "string" ? raw.description : undefined;
   const resource = typeof raw.resource === "string" ? raw.resource : undefined;
   const serviceName = printableName(typeof raw.serviceName === "string" ? raw.serviceName : undefined);
@@ -201,6 +221,7 @@ function normalizeRequirement(raw: unknown): PaymentRequirements {
       minDeposit,
       symbol,
       publishableKey,
+      ...(policy ? { policy } : {}),
     },
     escrow,
     ratePerSec,

@@ -14,6 +14,8 @@ export interface MeterOptions {
   sleep: (ms: number) => Promise<void>;
   write: (event: "token" | "cutoff", data: string) => Promise<void>;
   isAborted: () => boolean;
+  /** Return a cutoff reason to stop before the next token. Used for spend and duration caps. */
+  inspect?: () => Promise<string | null> | string | null;
 }
 
 function sseData(data: string): string {
@@ -21,7 +23,7 @@ function sseData(data: string): string {
 }
 
 /** Meter one accepted stream. Re-reads the escrow about once a second and cuts off when it dies. */
-export async function runMeter(options: MeterOptions): Promise<MeterStop> {
+export async function runMeter(options: MeterOptions): Promise<MeterStop | string> {
   const tickMs = options.tickMs ?? 250;
   const recheckMs = options.recheckMs ?? 1000;
   const now = options.now ?? Date.now;
@@ -29,6 +31,11 @@ export async function runMeter(options: MeterOptions): Promise<MeterStop> {
   let lastCheck = 0;
   let failures = 0;
   while (!options.isAborted()) {
+    const custom = await options.inspect?.();
+    if (custom) {
+      await options.write("cutoff", custom);
+      return custom;
+    }
     const time = now();
     if (time >= options.endAt) {
       await options.write("cutoff", "exhausted");
