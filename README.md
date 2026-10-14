@@ -62,7 +62,33 @@ sequenceDiagram
     E-->>S: rate × elapsed to provider
     E-->>A: remainder refunded (same tx)
 ```
-Owed is computed from block timestamps only: `owed = min(deposit, rate × (now − start))`. No per-tick signatures, no offchain vouchers. Per-request calls stay on x402 `exact`; it is not a new protocol.
+Owed is computed from block timestamps only: `owed = min(deposit, rate × (now − start))`. No per-tick signatures, no offchain vouchers. Per-request calls stay on x402 `exact`; it is not a new protocol. The time scheme is specified in [docs/schemes/stream-per-second.md](docs/schemes/stream-per-second.md) as an x402 v2 scheme (`paymentFlow: escrow`).
+
+## SDKs
+TypeScript packages in this repo. They are not published to npm.
+
+| Package | Role |
+|---|---|
+| `@streampay-402/client` | Buyer. `fetch` handles 402, opens the escrow stream, retries with `PAYMENT-SIGNATURE`, and closes it. |
+| `@streampay-402/provider` | Drop-in `streamPay` (Hono), `fetchStreamPay`, and `expressStreamPay`. Returns 402 terms and meters the response per second. |
+| `@streampay-402/protocol` | Shared scheme types and the HTTP codec. |
+
+```typescript
+import { streamPay, paymentRequirements } from "@streampay-402/provider";
+
+app.get("/api/work", streamPay({
+  publicClient, escrow, terms: paymentRequirements({ payTo, escrow, ratePerSec, chainId, resourceUrl: "/api/work" }),
+}));
+```
+
+```typescript
+import { StreamPayClient } from "@streampay-402/client";
+
+const client = new StreamPayClient({ escrow, chain, privateKey, maxRatePerSec });
+await client.withStream(url, async (session) => session.response.text());
+```
+
+`examples/agent.ts` and `examples/provider.ts` are the same flow wired to the packages. `bun test` covers the scheme codec, the spend caps, and the Hono, fetch, and Express adapters.
 
 ## Why Monad
 Per-second settlement only makes sense if opening and closing a session costs less than a few seconds of service. Monad's fast blocks and low fees make `open → use → close` feel instant, so the refund lands before the agent's next step.
@@ -118,7 +144,7 @@ bun src/agent.ts       # or click "Run agent"
 - `RATE_PER_SEC` (default 0.001 MON), `TASK_SECONDS` (default 12), `DEPOSIT_SECONDS` (default 60).
 - Security: `DEMO_TOKEN`, `MAX_RATE_PER_SEC` (0.001), `MAX_DEPOSIT` (0.1 MON), `TRUSTED_PAYEES`, `RUN_COOLDOWN_MS` (30000).
 - Local: `anvil --block-time 1` with `RPC_URL=http://127.0.0.1:8545 CHAIN_ID=31337`.
-- Code map: `contracts/src/StreamEscrow.sol` (escrow + tests), `src/server.ts` (402 terms, onchain checks, metered SSE), `src/agent.ts` (agent client), `web/` (dashboard + onboarding UI).
+- Code map: `contracts/src/StreamEscrow.sol` (escrow + tests), `packages/` (buyer SDK, provider middleware, scheme types), `src/server.ts` (demo 402 endpoint), `src/meter.ts` (registry services via the provider package), `examples/` (agent + provider on the SDKs), `web/` (dashboard + onboarding UI).
 </details>
 
 ## Tech stack

@@ -3,6 +3,7 @@
   "module": "index.ts",
   "type": "module",
   "private": true,
+  "workspaces": ["packages/*"],
   "devDependencies": {
     "@types/bun": "latest"
   },
@@ -11,6 +12,9 @@
   },
   "dependencies": {
     "@privy-io/react-auth": "^3.49.0",
+    "@streampay-402/client": "workspace:*",
+    "@streampay-402/protocol": "workspace:*",
+    "@streampay-402/provider": "workspace:*",
     "hono": "^4.13.13",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

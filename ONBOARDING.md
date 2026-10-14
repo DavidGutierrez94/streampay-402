@@ -9,7 +9,7 @@ Built on Monad testnet (chainId 10143) during Metropolis, Oct 13 2026.
 2. **Testnet gas drip** (`POST /api/registry/drip`) gives each address one 0.05 MON drip, capped, so new users can pay for their own tx.
 3. **Register a service** onchain: `registerService(name, ratePerSec, payee, keccak256(sk))`. The browser generates the `sk_test_…` secret, shows it once with a copy button, and only its hash goes onchain. The publishable key is `pk_test_<serviceId>`.
 4. **Register an agent identity** onchain: `registerAgent(name)`.
-5. **Get charged per second:** an agent calls `GET /api/registry/terms/pk_test_<id>` to get x402 `stream-per-second` terms (payTo, ratePerSec, escrow), then opens a `StreamEscrow` stream at that rate.
+5. **Get charged per second:** an agent calls `GET /api/registry/terms/pk_test_<id>` to get x402 v2 `stream-per-second` terms (`payTo`, `extra.ratePerSec`, `extra.escrow`; the flat `ratePerSec` / `escrow` fields are still present). Scheme spec: [docs/schemes/stream-per-second.md](docs/schemes/stream-per-second.md). The agent opens a `StreamEscrow` stream at that rate.
 
 ## API
 | endpoint | auth | purpose |

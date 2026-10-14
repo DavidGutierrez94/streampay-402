@@ -106,10 +106,11 @@ app.get("/onboard.js", () => new Response(Bun.file("web/onboard.js"), { headers:
 app.get("/dashboard", page("web/dashboard.html", "dashboard"));
 app.get("/dashboard.js", () => new Response(Bun.file("web/dashboard.js"), { headers: { "content-type": "text/javascript" } }));
 // Any service registered via /onboard is immediately callable here, metered per second
-app.get("/api/svc/:id", (c) => {
-  const raw = c.req.param("id"); const m = /^(?:pk_test_)?(\d{1,20})$/.exec(raw);
-  if (!m) return c.json({ error: "bad service id" }, 400);
-  return serveMetered(c, BigInt(m[1]));
+app.get("/api/svc/:id", async (c) => {
+  const raw = c.req.param("id");
+  const id = /^(?:pk_test_)?(\d{1,20})$/.exec(raw)?.[1];
+  if (!id) return c.json({ error: "bad service id" }, 400);
+  return serveMetered(c, BigInt(id));
 });
 app.get("/api/terms", (c) => c.json(terms()));
 
