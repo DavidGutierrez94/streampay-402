@@ -1,7 +1,7 @@
 // x402-style paid endpoint metered per second against an on-chain StreamEscrow.
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { parseEther, formatEther } from "viem";
+import { parseEther, formatEther, verifyMessage } from "viem";
 import { pub, abi, txUrl, addrUrl, CHAIN_ID, wallet } from "./chain";
 
 const ESCROW = process.env.ESCROW_ADDRESS as `0x${string}`;
@@ -43,6 +43,10 @@ const app = new Hono();
 app.get("/", (c) => c.html(Bun.file("web/index.html").text()));
 app.get("/api/terms", (c) => c.json(terms()));
 
+const sessions = new Set<string>();          // H-2: one live session per stream
+const claimScheduled = new Set<string>();    // M-4: at most one provider claim per stream
+const DEMO_TOKEN = process.env.DEMO_TOKEN ?? crypto.randomUUID();
+
 app.get("/api/infer", async (c) => {
   const sid = c.req.header("X-PAYMENT-STREAM");
   if (!sid) {
@@ -50,57 +54,83 @@ app.get("/api/infer", async (c) => {
     push("402", "agent hit /api/infer without payment -> 402 Payment Required with stream terms");
     return c.json(terms(), 402);
   }
+  if (!/^\d{1,78}$/.test(sid)) return c.json({ error: "bad stream id" }, 400);   // L-4
   const id = BigInt(sid);
-  const s = await readStream(id);
-  if (!s.active || s.payee.toLowerCase() !== PAYEE.toLowerCase() || s.rate < RATE) {
+  const s = await readStream(id).catch(() => null);
+  if (!s) return c.json({ error: "cannot verify stream (RPC)" }, 503);           // M-2 fail closed
+  // H-2: caller must prove it is the stream's payer
+  const sig = c.req.header("X-PAYMENT-SIG") as `0x${string}` | undefined;
+  const owner = !!sig && (await verifyMessage({ address: s.payer, message: `x402-stream:${ESCROW.toLowerCase()}:${sid}`, signature: sig }).catch(() => false));
+  if (!owner) { push("reject", `stream #${sid}: missing/invalid payer signature`); return c.json({ error: "stream not owned by caller" }, 402); }
+  if (sessions.has(sid)) return c.json({ error: "stream already in use" }, 409);
+  if (!s.active || s.payee.toLowerCase() !== PAYEE.toLowerCase() || s.rate < RATE || s.deposit < RATE * 10n) {  // L-2 minDeposit
     push("reject", `stream ${sid} not acceptable (active=${s.active})`);
     return c.json({ error: "stream not funded/active", ...terms() }, 402);
   }
-  push("verify", `stream #${sid} verified on-chain: deposit ${formatEther(s.deposit)} MON @ ${formatEther(s.rate)} MON/s`);
+  push("verify", `stream #${sid} verified on-chain + payer signature: deposit ${formatEther(s.deposit)} MON @ ${formatEther(s.rate)} MON/s`);
   current = { id: sid, ratePerSec: formatEther(s.rate), deposit: formatEther(s.deposit), start: s.start * 1000, tokens: 0 };
   const words = "the agent is renting inference by the second and every token you see is metered against a live on chain escrow on monad when the agent stops the meter stops and the unused deposit goes straight back".split(" ");
-  if (process.env.PAYEE_KEY) setTimeout(async () => {   // provider claims accrued earnings mid-stream
-    try {
-      const h = await wallet(process.env.PAYEE_KEY!).writeContract({ address: ESCROW, abi, functionName: "claim", args: [id], gas: 120000n });
-      const r = await pub.waitForTransactionReceipt({ hash: h });
-      push("claim", `provider claimed accrued earnings mid-stream (${r.status})`, txUrl(h));
-    } catch (e: any) { push("claim", "claim failed: " + e.shortMessage); }
-  }, 5000);
+  if (process.env.PAYEE_KEY && !claimScheduled.has(sid)) {
+    claimScheduled.add(sid);
+    setTimeout(async () => {   // provider claims accrued earnings mid-stream
+      try {
+        const h = await wallet(process.env.PAYEE_KEY!).writeContract({ address: ESCROW, abi, functionName: "claim", args: [id], gas: 120000n });
+        const r = await pub.waitForTransactionReceipt({ hash: h });
+        push("claim", `provider claimed accrued earnings mid-stream (${r.status})`, txUrl(h));
+      } catch (e: any) { push("claim", "claim failed: " + (e.shortMessage ?? "error")); }
+    }, 5000);
+  }
+  sessions.add(sid);
+  const endAt = s.start * 1000 + Number((s.deposit * 1000n) / s.rate);   // local exhaustion bound (L-2)
   return streamSSE(c, async (st) => {
-    let i = 0, lastCheck = 0;
-    let aborted = false;
-    st.onAbort(() => { aborted = true; });
-    while (!aborted) {
-      if (Date.now() - lastCheck > 1000) {
-        lastCheck = Date.now();
-        const live = await readStream(id).catch(() => null);
-        if (live && !live.active) {
-          push("cutoff", `stream #${sid} ${live.stoppedAt ? "closed by payer" : "balance exhausted"} -> service cut off`);
-          await st.writeSSE({ event: "cutoff", data: live.stoppedAt ? "closed" : "exhausted" });
-          break;
+    try {
+      let i = 0, lastCheck = 0, fails = 0;
+      let aborted = false;
+      st.onAbort(() => { aborted = true; });
+      while (!aborted) {
+        if (Date.now() >= endAt) {
+          push("cutoff", `stream #${sid} balance exhausted -> service cut off`);
+          await st.writeSSE({ event: "cutoff", data: "exhausted" }); break;
         }
+        if (Date.now() - lastCheck > 1000) {
+          lastCheck = Date.now();
+          const live = await readStream(id).catch(() => null);
+          fails = live ? 0 : fails + 1;
+          if (fails >= 3) { push("cutoff", `stream #${sid} unverifiable (RPC) -> cut off`); await st.writeSSE({ event: "cutoff", data: "unverifiable" }); break; }
+          if (live && !live.active) {
+            push("cutoff", `stream #${sid} ${live.stoppedAt ? "closed by payer" : "balance exhausted"} -> service cut off`);
+            await st.writeSSE({ event: "cutoff", data: live.stoppedAt ? "closed" : "exhausted" });
+            break;
+          }
+        }
+        await st.writeSSE({ event: "token", data: words[i++ % words.length] });
+        if (current?.id === sid) current.tokens++;
+        await st.sleep(200);
       }
-      await st.writeSSE({ event: "token", data: words[i++ % words.length] });
-      if (current) current.tokens++;
-      await st.sleep(200);
-    }
-    if (current?.id === sid) current.stopped = Date.now();
+      if (current?.id === sid) current.stopped = Date.now();
+    } finally { sessions.delete(sid); }
   });
 });
 
-app.post("/api/log", async (c) => {           // agent reports its own tx hashes for the dashboard
-  const b = await c.req.json();
-  push(b.kind, b.msg, b.hash ? txUrl(b.hash) : undefined);
-  if (b.kind === "close" && current) current.stopped = Date.now();
+app.post("/api/log", async (c) => {           // agent reports its own tx hashes; token-protected (M-3)
+  if (c.req.header("x-demo-token") !== DEMO_TOKEN) return c.json({ ok: false }, 403);
+  const b = await c.req.json().catch(() => ({}));
+  const hash = /^0x[0-9a-fA-F]{64}$/.test(b.hash ?? "") ? b.hash : undefined;
+  const kind = String(b.kind ?? "").slice(0, 16);
+  push(kind, String(b.msg ?? "").slice(0, 300), hash && txUrl(hash));
+  if (kind === "close" && current) current.stopped = Date.now();
   return c.json({ ok: true });
 });
 app.get("/api/state", (c) => c.json({ escrow: ESCROW, escrowUrl: addrUrl(ESCROW), rate: formatEther(RATE), current, log: log.slice(-40) }));
 
-let running = false;
+let running = false, lastRun = 0;
+const COOLDOWN_MS = Number(process.env.RUN_COOLDOWN_MS ?? 30_000);
 app.post("/api/run-agent", (c) => {
   if (running) return c.json({ ok: false, msg: "agent already running" });
-  running = true; log.length = 0; current = null;
-  const p = Bun.spawn(["bun", "src/agent.ts"], { env: { ...process.env, SERVER: `http://localhost:${PORT}` }, stdout: "inherit", stderr: "inherit" });
+  if (Date.now() - lastRun < COOLDOWN_MS) return c.json({ ok: false, msg: `cooling down, try again in ${Math.ceil((COOLDOWN_MS - (Date.now() - lastRun)) / 1000)}s` });
+  running = true; lastRun = Date.now(); log.length = 0; current = null;
+  const { PAYEE_KEY: _drop, ...childEnv } = process.env;     // L-1: payer process never sees payee key
+  const p = Bun.spawn(["bun", "src/agent.ts"], { env: { ...childEnv, DEMO_TOKEN, SERVER: `http://localhost:${PORT}` }, stdout: "inherit", stderr: "inherit" });
   p.exited.then(() => { running = false; });
   return c.json({ ok: true });
 });
