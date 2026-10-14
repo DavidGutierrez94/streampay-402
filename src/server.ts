@@ -4,6 +4,7 @@ import { streamSSE } from "hono/streaming";
 import { parseEther, formatEther, verifyMessage } from "viem";
 import { pub, abi, txUrl, addrUrl, CHAIN_ID, wallet } from "./chain";
 import { registry } from "./registry";
+import { serveMetered } from "./meter";
 
 const ESCROW = process.env.ESCROW_ADDRESS as `0x${string}`;
 const PAYEE = process.env.PAYEE_ADDRESS as `0x${string}`;
@@ -47,6 +48,12 @@ app.get("/theme.css", () => new Response(Bun.file("web/theme.css"), { headers: {
 app.route("/api/registry", registry);   // onboarding: ServiceRegistry + pk_/sk_ keys
 app.get("/onboard", (c) => c.html(Bun.file("web/onboard.html").text()));
 app.get("/onboard.js", () => new Response(Bun.file("web/onboard.js"), { headers: { "content-type": "text/javascript" } }));
+// Any service registered via /onboard is immediately callable here, metered per second
+app.get("/api/svc/:id", (c) => {
+  const raw = c.req.param("id"); const m = /^(?:pk_test_)?(\d{1,20})$/.exec(raw);
+  if (!m) return c.json({ error: "bad service id" }, 400);
+  return serveMetered(c, BigInt(m[1]));
+});
 app.get("/api/terms", (c) => c.json(terms()));
 
 const sessions = new Set<string>();          // H-2: one live session per stream
