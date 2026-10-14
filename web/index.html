@@ -244,7 +244,40 @@ body[data-phase=idle] .fill,body[data-phase=starting] .fill,body[data-phase=nego
 footer{border-top:1px solid var(--text);margin-top:40px;color:var(--muted)}
 footer a{color:var(--muted)}
 .feed h2,.side h2{font-size:15px;font-weight:700}
-@media (max-width:640px){.top-r{width:100%;justify-content:space-between}.nav3{order:-1;width:100%}}
+.stopbar{display:flex;align-items:center;justify-content:space-between;gap:12px 20px;margin:4px 0 8px}
+.btn.stop{height:auto;min-height:52px;min-width:min(100%,220px);padding:0 22px;border-radius:3px;background:transparent;color:var(--text);border:1px solid var(--text);font:800 18px/1 var(--sans);letter-spacing:-.02em;transition:none}
+.btn.stop svg{width:12px;height:12px;animation:none}
+.btn.stop.armed,.stopbar:has(.btn.stop.armed){width:100%}
+.stopbar:has(.btn.stop.armed){flex-direction:column;align-items:stretch}
+.btn.stop.armed{justify-content:center;background:#e8461e;border-color:#e8461e;color:#fff}
+.btn.stop.armed:hover{background:#b8330f;border-color:#b8330f;color:#fff}
+.btn.stop:disabled{cursor:not-allowed}
+.btn.stop[aria-busy=true]{cursor:progress}
+.btn.stop[aria-busy=true]{background:var(--panel-2);color:var(--text);border-color:var(--line-2)}
+#stopHint{margin:0;max-width:38ch;color:var(--muted);font-size:13.5px}
+.receipt{margin-top:22px;padding-top:6px}
+.receipt[hidden]{display:none}
+.receipt-top{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.receipt h2{margin:0;font-size:clamp(26px,3vw,36px);line-height:1;font-weight:800;letter-spacing:-.03em;font-variation-settings:"wdth" 116}
+.receipt h2:focus{outline:none}
+.receipt h2:focus-visible{outline:2px solid #e8461e;outline-offset:3px}
+.receipt .lede{margin:8px 0 0;color:var(--muted)}
+.receipt .ruler{height:14px;margin:12px 0 8px}
+.receipt-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.receipt-grid div{padding:12px 12px 10px;background:var(--bg);box-shadow:inset 0 0 0 1px var(--line)}
+.receipt-grid b{display:block;margin-top:6px;font-family:var(--mono);font-weight:500;font-size:clamp(16px,2.1vw,22px);letter-spacing:-.03em;word-break:break-all}
+.receipt-grid .paid b{color:#e8461e}
+#rTx{display:inline-flex;align-items:center;min-height:44px;margin-top:14px;padding:0 16px;border:1px solid var(--text);border-radius:3px;background:var(--text);color:var(--bg);font-weight:700;text-decoration:none}
+#rTx:hover{background:#e8461e;border-color:#e8461e;color:#fff}
+#rTx[hidden]{display:none}
+@media (max-width:640px){
+  .top-r{width:100%;justify-content:space-between}
+  .nav3{order:-1;width:100%}
+  .stopbar{flex-direction:column;align-items:stretch}
+  .btn.stop{width:100%}
+  .receipt-grid{grid-template-columns:1fr}
+  #rTx{width:100%;justify-content:center}
+}
 </style>
 </head>
 <body data-phase="idle">
@@ -264,7 +297,7 @@ footer a{color:var(--muted)}
     </div>
   </header>
 
-  <div class="pagehead"><h1>Watch an agent pay <span>by the second.</span></h1><p>Press Run agent: it opens an escrow stream on Monad testnet, the meter bills every second, and the unused budget is refunded on close.</p></div>
+  <div class="pagehead"><h1>Watch an agent pay <span>by the second.</span></h1><p>Press Run agent: it opens an escrow stream on Monad testnet and the meter bills every second. Press Stop agent when you want. The receipt shows the seconds used, the amount paid, and the unused escrow refunded.</p></div>
   <div class="ruler" aria-hidden="true"></div>
   <main class="grid">
     <section class="card hero" aria-labelledby="costLabel">
@@ -274,6 +307,13 @@ footer a{color:var(--muted)}
       </div>
       <div class="counter" aria-hidden="true"><span><span id="cInt">0</span><span class="pt">.</span><span class="hi" id="cHi">000</span><span class="lo" id="cLo">000</span></span><span class="unit">MON</span></div>
       <span class="sr" id="costSr" aria-live="off"></span>
+      <div class="stopbar">
+        <button class="btn stop" id="stop" type="button" disabled aria-describedby="stopHint">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.2" y="3.2" width="9.6" height="9.6" rx="1" fill="currentColor"/></svg>
+          <span id="stopLabel">Stop agent</span>
+        </button>
+        <p id="stopHint">Closes the stream and refunds unused escrow in one transaction.</p>
+      </div>
       <div class="meta">
         <div>Rate<b id="rate">—</b></div>
         <div>Elapsed<b id="elapsed">0.0 s</b></div>
@@ -298,6 +338,20 @@ footer a{color:var(--muted)}
         <div class="tile"><div class="eyebrow" id="paidLabel">Accrued to provider</div><div class="v"><span id="paid">—</span><small>MON</small></div><div class="s">rate × elapsed, from block time</div></div>
         <div class="tile ref"><div class="eyebrow">Refunded to agent</div><div class="v"><span id="refund">—</span><small>MON</small></div><div class="s">returned in the close tx</div></div>
       </div>
+      <section class="receipt" id="receipt" hidden aria-live="polite" aria-labelledby="receiptTitle">
+        <div class="receipt-top">
+          <h2 id="receiptTitle" tabindex="-1">Receipt</h2>
+          <span class="code">Monad testnet</span>
+        </div>
+        <div class="ruler" aria-hidden="true"></div>
+        <p class="lede" id="receiptLede">Pay only for the time you used.</p>
+        <div class="receipt-grid">
+          <div><span class="eyebrow">Seconds used</span><b id="rSecs">—</b></div>
+          <div class="paid"><span class="eyebrow">Amount paid</span><b id="rPaid">—</b></div>
+          <div><span class="eyebrow">Unused escrow refunded</span><b id="rRefund">—</b></div>
+        </div>
+        <a id="rTx" hidden target="_blank" rel="noopener" aria-label="View close transaction on Monad testnet explorer">View transaction</a>
+      </section>
     </section>
 
     <aside class="side">
@@ -354,7 +408,8 @@ const KIND = {
 const STEPS = ["open", "streaming", "cutoff", "refunded"];
 const EXT = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M6 3.5h6.5V10M12.5 3.5 4 12"/></svg>';
 
-let S = null, pending = 0, feedSig = "", firstFeed = true, cellN = 0, cellKey = "", refund = null;
+let S = null, pending = 0, feedSig = "", firstFeed = true, cellN = 0, cellKey = "", refund = null, stopping = false, liveReceipt = null;
+const MONAD_TX = "https://testnet.monadscan.com/tx/";
 const seen = new Set();
 const txt = (id, v) => { const el = $(id); if (el.textContent !== v) el.textContent = v; };
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -425,11 +480,59 @@ function render() {
   });
 
   const busy = ["starting", "negotiating", "open", "streaming", "cutoff"].includes(ph);
-  $("run").setAttribute("aria-busy", busy);
+  $("run").setAttribute("aria-busy", busy || stopping);
   txt("runLabel", busy ? "Agent running…" : ph === "refunded" ? "Run again" : "Run agent");
   $("runIcon").innerHTML = busy ? '<path d="M8 2a6 6 0 1 0 6 6" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round"/>' : '<path d="M4.5 2.8v10.4a.6.6 0 0 0 .9.5l8.3-5.2a.6.6 0 0 0 0-1L5.4 2.3a.6.6 0 0 0-.9.5z"/>';
 
+  if (S.receipt) liveReceipt = S.receipt;
+  else if (!S.log.length) liveReceipt = null;
+  if (liveReceipt) stopping = false;
+  paintReceipt(liveReceipt, stopping && !liveReceipt);
+  armStop();
   renderFeed();
+}
+
+function receiptHref(r) {
+  if (!r || r.chainId !== 10143) return "";
+  if (!Number.isInteger(r.secondsUsed) || r.secondsUsed < 0 || r.secondsUsed > 86400 * 30) return "";
+  if (!/^\d+(\.\d+)?$/.test(r.paid || "") || !/^\d+(\.\d+)?$/.test(r.refunded || "")) return "";
+  if (!/^0x[0-9a-fA-F]{64}$/.test(r.tx || "")) return "";
+  return MONAD_TX + r.tx;
+}
+
+function paintReceipt(r, pendingStop) {
+  const href = receiptHref(r);
+  const box = $("receipt");
+  if (!href && !pendingStop) { box.hidden = true; paintReceipt.shown = false; return; }
+  box.hidden = false;
+  if (!href) {
+    txt("receiptLede", "Closing the stream…");
+    txt("rSecs", "—"); txt("rPaid", "—"); txt("rRefund", "—");
+    $("rTx").hidden = true;
+    return;
+  }
+  txt("receiptLede", "Pay only for the time you used.");
+  txt("rSecs", r.secondsUsed.toLocaleString() + " s");
+  txt("rPaid", r.paid + " MON");
+  txt("rRefund", r.refunded + " MON");
+  const a = $("rTx");
+  a.href = href;
+  a.hidden = false;
+  if (!paintReceipt.shown) {
+    paintReceipt.shown = true;
+    $("receiptTitle").focus({ preventScroll: true });
+    box.scrollIntoView({ block: "nearest" });
+  }
+}
+
+function armStop() {
+  const done = !!(liveReceipt || (S && S.receipt));
+  const on = !!(S && S.running && !done && !stopping);
+  const btn = $("stop");
+  btn.disabled = !on;
+  btn.classList.toggle("armed", on);
+  btn.setAttribute("aria-busy", stopping ? "true" : "false");
+  txt("stopLabel", stopping ? "Stopping…" : done ? "Stopped" : "Stop agent");
 }
 
 function renderFeed() {
@@ -512,8 +615,27 @@ function toast(msg) {
 $("run").addEventListener("click", async () => {
   try {
     const r = await (await fetch("/api/run-agent", { method: "POST" })).json();
-    if (r.ok) { pending = Date.now(); feedSig = ""; } else toast(r.msg || "Agent already running");
+    if (r.ok) {
+      pending = Date.now(); feedSig = ""; stopping = false; liveReceipt = null; paintReceipt.shown = false;
+      paintReceipt(null, false);
+      armStop();
+    } else toast(r.msg || "Agent already running");
   } catch { toast("Server unreachable"); }
+  poll();
+});
+
+$("stop").addEventListener("click", async () => {
+  if ($("stop").disabled) return;
+  stopping = true;
+  armStop();
+  paintReceipt(null, true);
+  try {
+    const res = await fetch("/api/stop-agent", { method: "POST" });
+    const j = await res.json().catch(() => ({}));
+    if (j.receipt) { liveReceipt = j.receipt; stopping = false; paintReceipt(j.receipt, false); }
+    else { stopping = false; toast(j.msg || "Could not close the stream"); paintReceipt(liveReceipt, false); }
+  } catch { stopping = false; toast("Server unreachable"); }
+  armStop();
   poll();
 });
 

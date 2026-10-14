@@ -1,10 +1,11 @@
 // x402-style paid endpoint metered per second against an on-chain StreamEscrow.
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { parseEther, formatEther, verifyMessage } from "viem";
+import { parseEther, formatEther, parseEventLogs, verifyMessage } from "viem";
 import { pub, abi, txUrl, addrUrl, CHAIN_ID, wallet } from "./chain";
 import { registry } from "./registry";
 import { serveMetered } from "./meter";
+import { conservationReceipt, settlementReceipt, type Receipt } from "./receipt";
 
 const ESCROW = process.env.ESCROW_ADDRESS as `0x${string}`;
 const PAYEE = process.env.PAYEE_ADDRESS as `0x${string}`;
@@ -58,7 +59,7 @@ const PAGES: Record<string, Meta> = {
   onboard: { path: "/onboard", title: "Sign up · Bill your API by the second · StreamPay-402",
     description: "Pay only for the time you actually use: register your agent, API or compute service, set a price per second onchain and get API keys. Email sign-up, no wallet needed." },
   demo: { path: "/demo", title: "Live demo · An AI agent paying by the second · StreamPay-402",
-    description: "Pay only for the time you actually use: watch an AI agent open an escrow stream on Monad testnet, pay per second for a service and get unused funds refunded." },
+    description: "Pay only for the time you actually use: watch an AI agent open an escrow stream on Monad testnet, stop it whenever you want, and get a receipt for the seconds used, the amount paid, and the unused escrow refunded." },
 };
 function headTags(base: string, m: Meta) {
   const url = base + m.path, img = base + "/og.png", t = esc(m.title), d = esc(m.description);
@@ -177,27 +178,135 @@ app.get("/api/infer", async (c) => {
   });
 });
 
+let receipt: Receipt | null = null;
+
+function receiptFromClose(hash: `0x${string}`, logs: any, stoppedAt: bigint, snap: { rate: bigint; deposit: bigint; start: number }): Receipt | null {
+  const ev = parseEventLogs({ abi, logs, eventName: "Closed" })[0] as
+    | { args: { paidToPayee: bigint; refunded: bigint } }
+    | undefined;
+  if (!ev || snap.start <= 0) return null;
+  const common = {
+    deposit: snap.deposit,
+    start: BigInt(snap.start),
+    stoppedAt,
+    refunded: ev.args.refunded,
+    tx: hash,
+    chainId: CHAIN_ID,
+  };
+  return settlementReceipt({ ...common, ratePerSec: snap.rate, paidToPayee: ev.args.paidToPayee })
+    ?? conservationReceipt(common);
+}
+
+async function receiptFromTx(hash: `0x${string}`): Promise<Receipt | null> {
+  const cr = await pub.getTransactionReceipt({ hash });
+  if (cr.status !== "success") return null;
+  const ev = parseEventLogs({ abi, logs: cr.logs, eventName: "Closed" })[0] as { args: { id: bigint } } | undefined;
+  if (!ev) return null;
+  const block = await pub.getBlock({ blockNumber: cr.blockNumber });
+  let s = await readStream(ev.args.id).catch(() => null);
+  for (let i = 0; s && !s.stoppedAt && i < 4; i++) {
+    await Bun.sleep(400);
+    s = await readStream(ev.args.id).catch(() => null);
+  }
+  if (!s) return null;
+  const stoppedAt = s.stoppedAt ? BigInt(s.stoppedAt) : block.timestamp;
+  return receiptFromClose(hash, cr.logs, stoppedAt, s);
+}
+
+function publishReceipt(built: Receipt) {
+  receipt = built;
+  if (current && !current.stopped) current.stopped = Date.now();
+  if (!log.some((e) => e.kind === "close")) {
+    push("close", `closed: paid ${built.paid} MON to provider, refunded ${built.refunded} MON instantly`, built.txUrl);
+  }
+}
+
 app.post("/api/log", async (c) => {           // agent reports its own tx hashes; token-protected (M-3)
   if (c.req.header("x-demo-token") !== DEMO_TOKEN) return c.json({ ok: false }, 403);
   const b = await c.req.json().catch(() => ({}));
-  const hash = /^0x[0-9a-fA-F]{64}$/.test(b.hash ?? "") ? b.hash : undefined;
+  const hash = /^0x[0-9a-fA-F]{64}$/.test(b.hash ?? "") ? b.hash as `0x${string}` : undefined;
   const kind = String(b.kind ?? "").slice(0, 16);
   push(kind, String(b.msg ?? "").slice(0, 300), hash && txUrl(hash));
   if (kind === "close" && current) current.stopped = Date.now();
+  if (kind === "close" && hash && !receipt) {
+    const built = await receiptFromTx(hash).catch(() => null);
+    if (built) receipt = built;
+  }
   return c.json({ ok: true });
 });
-app.get("/api/state", (c) => c.json({ escrow: ESCROW, escrowUrl: addrUrl(ESCROW), rate: formatEther(RATE), current, log: log.slice(-40) }));
+app.get("/api/state", (c) => c.json({
+  escrow: ESCROW, escrowUrl: addrUrl(ESCROW), rate: formatEther(RATE), current, running, receipt, log: log.slice(-40),
+}));
 
 let running = false, lastRun = 0;
+let stopRequested = false;
+let closing = false;
+let agentProc: ReturnType<typeof Bun.spawn> | null = null;
 const COOLDOWN_MS = Number(process.env.RUN_COOLDOWN_MS ?? 30_000);
+
+async function closeActiveStream(): Promise<Receipt | null> {
+  if (!current || !process.env.PAYER_KEY || !ESCROW) return null;
+  const id = BigInt(current.id);
+  const before = await readStream(id).catch(() => null);
+  if (!before || before.stoppedAt) return null;
+  const hash = await wallet(process.env.PAYER_KEY).writeContract({
+    address: ESCROW, abi, functionName: "close", args: [id], gas: 200000n,
+  });
+  const cr = await pub.waitForTransactionReceipt({ hash });
+  if (cr.status !== "success") return null;
+  const block = await pub.getBlock({ blockNumber: cr.blockNumber });
+  return receiptFromClose(hash, cr.logs, block.timestamp, before);
+}
+
+async function performStop(): Promise<Receipt | null> {
+  stopRequested = true;
+  const willClose = !!(current && process.env.PAYER_KEY);
+  if (willClose) closing = true;                 // set before the signal so the agent waits instead of double-closing
+  try { agentProc?.kill("SIGINT"); } catch { /* already exited */ }
+  const deadline = Date.now() + 45_000;
+  let triedClose = false;
+  try {
+    while (!receipt && Date.now() < deadline) {
+      if (!triedClose && willClose) {
+        triedClose = true;
+        try {
+          const built = await closeActiveStream();
+          if (built) { publishReceipt(built); return built; }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : "";
+          console.log("[stop] close failed", msg.slice(0, 180));
+        }
+      }
+      if (receipt) return receipt;
+      if (!running && !current) return null;
+      await Bun.sleep(200);
+    }
+    return receipt;
+  } finally { closing = false; }
+}
+
+let stopWait: Promise<Receipt | null> | null = null;
+
+app.get("/api/agent-stop", (c) => c.json({ stop: stopRequested, closing }));
+
 app.post("/api/run-agent", (c) => {
   if (running) return c.json({ ok: false, msg: "agent already running" });
   if (Date.now() - lastRun < COOLDOWN_MS) return c.json({ ok: false, msg: `cooling down, try again in ${Math.ceil((COOLDOWN_MS - (Date.now() - lastRun)) / 1000)}s` });
-  running = true; lastRun = Date.now(); log.length = 0; current = null;
+  running = true; lastRun = Date.now(); log.length = 0; current = null; receipt = null; stopRequested = false; closing = false;
   const { PAYEE_KEY: _drop, ...childEnv } = process.env;     // L-1: payer process never sees payee key
-  const p = Bun.spawn(["bun", "src/agent.ts"], { env: { ...childEnv, DEMO_TOKEN, SERVER: `http://localhost:${PORT}` }, stdout: "inherit", stderr: "inherit" });
-  p.exited.then(() => { running = false; });
+  const proc = Bun.spawn(["bun", "src/agent.ts"], { env: { ...childEnv, DEMO_TOKEN, SERVER: `http://localhost:${PORT}` }, stdout: "inherit", stderr: "inherit" });
+  agentProc = proc;
+  proc.exited.then(() => { if (agentProc === proc) agentProc = null; running = false; });
   return c.json({ ok: true });
+});
+
+app.post("/api/stop-agent", async (c) => {
+  if (receipt) return c.json({ ok: true, receipt });
+  if (!running && !current) return c.json({ ok: false, msg: "No active stream" }, 409);
+  if (!stopWait) stopWait = performStop().finally(() => { stopWait = null; });
+  const built = await stopWait;
+  if (built || receipt) return c.json({ ok: true, receipt: receipt ?? built });
+  return c.json({ ok: false, msg: running ? "Close is still confirming" : "Agent stopped before a stream was open" }, running ? 504 : 409);
 });
 
 export default { port: PORT, fetch: app.fetch, idleTimeout: 120 };
