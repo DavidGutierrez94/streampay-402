@@ -50,6 +50,7 @@ bun src/server.ts          # http://localhost:4020 dashboard + paid endpoint
 bun src/agent.ts           # or click "Run agent" on the dashboard
 ```
 Env knobs: `RATE_PER_SEC` (default 0.001 MON), `TASK_SECONDS` (agent stops after, default 12), `DEPOSIT_SECONDS` (budget, default 60).
+Security knobs: `DEMO_TOKEN` (random; protects `/api/log`), `MAX_RATE_PER_SEC` (default 0.001), `MAX_DEPOSIT` (default 0.1 MON), `TRUSTED_PAYEES` (comma list; defaults to `PAYEE_ADDRESS`), `RUN_COOLDOWN_MS` (default 30000).
 
 Local: `anvil --block-time 1` with `RPC_URL=http://127.0.0.1:8545 CHAIN_ID=31337`.
 
