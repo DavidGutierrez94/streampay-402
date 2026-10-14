@@ -9,7 +9,8 @@ import { applyEnvPolicy } from "../src/policy";
 import { REGISTRY, registryAbi, hashKey, parsePk, readService, mountBillingAdmin } from "../src/registry";
 import { applyEnvWebhook } from "../src/webhooks";
 
-const pk = process.env.PROVIDER_PK ?? "", sk = process.env.PROVIDER_SK ?? "";
+const pk = process.env.PROVIDER_PK ?? "";
+const sk = process.env.PROVIDER_SK ?? "";
 const id = parsePk(pk);
 if (id === null || !sk.startsWith("sk_test_")) throw new Error("set PROVIDER_PK=pk_test_<id> and PROVIDER_SK=sk_test_...");
 const ok = await pub.readContract({ address: REGISTRY, abi: registryAbi, functionName: "verifyKey", args: [id, hashKey(sk)] });

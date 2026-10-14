@@ -20,14 +20,15 @@ let reads = 0;
 let activeFor = Number.POSITIVE_INFINITY;
 
 function stream(over: Partial<StreamView> = {}): StreamView {
+  const active = reads <= activeFor;
   return {
     payer: payer.address,
     payee,
     rate: RATE,
     deposit: RATE * 30n,
     start: START,
-    stoppedAt: 0,
-    active: reads <= activeFor,
+    stoppedAt: active ? 0 : START + 1,
+    active,
     ...over,
   };
 }
