@@ -50,3 +50,14 @@ Local: `anvil --block-time 1` with `RPC_URL=http://127.0.0.1:8545 CHAIN_ID=31337
 - `src/server.ts` — Hono server: 402 terms, on-chain verification, metered SSE, cutoff, dashboard API
 - `src/agent.ts` — autonomous agent client
 - `web/index.html` — live per-second cost counter + explorer links
+
+## Attribution
+- [x402](https://x402.org) payment-required handshake (this repo adds a `stream-per-second` scheme on top; no x402 code vendored).
+- [Foundry](https://getfoundry.sh), [viem](https://viem.sh), [Hono](https://hono.dev), [Bun](https://bun.sh).
+- Monad testnet network info from [docs.monad.xyz](https://docs.monad.xyz).
+
+## AI tools disclosure
+Built during the Monad hackathon (Oct 13, 2026) with AI coding assistants (an AI agent wrote most of the code under the author's direction; architecture review with Claude). All code was reviewed and tested by the author.
+
+## License
+MIT — see [LICENSE](LICENSE).
