@@ -1,9 +1,90 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>streampay-402 · sign up</title><link rel="icon" href="/logo.png">
-<style>body{font:15px/1.5 ui-sans-serif,system-ui;background:#0b0b12;color:#eee;max-width:720px;margin:40px auto;padding:0 16px}
-a{color:#a78bfa}button{background:#7c3aed;color:#fff;border:0;border-radius:8px;padding:10px 14px;margin:4px 6px 4px 0;cursor:pointer}
-button:disabled{opacity:.5}button.link{background:none;color:#a78bfa;padding:0}input{background:#16161f;color:#eee;border:1px solid #333;border-radius:6px;padding:8px;margin:4px 0 10px;width:100%}
-.card,.keys{background:#13131c;border:1px solid #2a2a3a;border-radius:12px;padding:16px;margin:12px 0}.muted{color:#999;font-size:13px;word-break:break-all}
-.key{display:flex;gap:8px;align-items:center;margin:6px 0}.key code{flex:1;word-break:break-all;background:#000;padding:6px;border-radius:6px}pre{white-space:pre-wrap;font-size:12px;color:#aaa}</style></head>
-<body><h1>Sell your agent service by the second</h1><p class="muted">Sign up, register onchain on Monad, get Stripe-style keys. <a href="/">← live demo</a></p>
-<div id="root"></div><script type="module" src="/onboard.js"></script></body></html>
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign up or log in · streampay-402</title>
+<meta name="description" content="Register your agent service on Monad and get pk_/sk_ keys for per-second billing.">
+<meta name="theme-color" content="#f0f0eb">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='3' fill='%2316140f'/%3E%3Cpath d='M4 16h3v-4h3v-4h3v4h3v4h4' stroke='%23e8461e' stroke-width='2.2' fill='none' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Martian+Mono:wdth,wght@87.5..112.5,400..600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/theme.css">
+<style>
+.shell{display:grid;grid-template-columns:1fr;gap:36px;padding:clamp(32px,6vw,72px) 0 0}
+@media (min-width:940px){.shell{grid-template-columns:minmax(0,5fr) minmax(0,6fr);grid-template-rows:auto 1fr;column-gap:72px;row-gap:0;align-items:start}.panel{grid-column:2;grid-row:1/3}.intro,.details{grid-column:1}}
+h1{margin:0;max-width:12ch;font-size:clamp(40px,5.4vw,68px);line-height:.95;font-weight:800;letter-spacing:-.035em;font-variation-settings:"wdth" 118;text-wrap:balance}
+h1 span{color:var(--signal)}
+.sub{margin:22px 0 0;max-width:42ch;font-size:clamp(16px,1.5vw,18px);color:var(--ink-2);text-wrap:pretty}
+.get{margin:0;padding:0;list-style:none;counter-reset:g;border-top:1px solid var(--ink)}
+.get li{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;padding:14px 0;border-bottom:1px solid var(--rule);font-size:15px;color:var(--ink-2)}
+.get li b{display:block;color:var(--ink);font-weight:600}
+.get li::before{counter-increment:g;content:counter(g);grid-row:span 2;font:500 12.5px/1.7 var(--mono);color:var(--signal-ink)}
+.trust{display:flex;flex-wrap:wrap;gap:6px 20px;margin-top:18px;font-size:13.5px;color:var(--ink-3)}
+
+/* the form side renders from onboard.js; style its markup in place */
+.panel{border:1px solid var(--ink);border-radius:4px;background:var(--paper-2);box-shadow:0 1px 0 var(--ink),0 22px 40px -28px rgba(22,20,15,.45)}
+.panel-h{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 22px;background:var(--ink);color:var(--paper);border-radius:3px 3px 0 0;font-size:14px;font-weight:600}
+.panel-h span{font:400 12px var(--mono);color:#b9b4a6}
+.panel-h i{display:inline-block;width:8px;height:8px;margin-right:8px;background:var(--signal);vertical-align:1px}
+#root{display:flex;flex-direction:column;gap:14px;padding:22px;min-height:180px}
+#root>p{margin:0;color:var(--ink-2)}
+#root>p:only-child,#root>p:not(.muted){font-size:15px}
+.muted{font-size:13px;color:var(--ink-3);overflow-wrap:anywhere}
+.muted a{font-family:var(--mono);font-size:12px;color:var(--ink)}
+#root>p.muted{padding-bottom:14px;border-bottom:1px solid var(--rule-2)}
+
+button{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:48px;padding:0 20px;border:1px solid var(--ink);border-radius:3px;background:var(--ink);color:var(--paper);font:600 16px/1.2 var(--sans);font-variation-settings:"wdth" 108;cursor:pointer;transition:background .2s var(--ease),border-color .2s var(--ease),color .2s var(--ease),transform .12s}
+button:hover{background:var(--signal-ink);border-color:var(--signal-ink);color:#fff}
+button:active{transform:translateY(1px)}
+button:disabled,button:disabled:hover{background:var(--paper-3);border-color:var(--rule-2);color:var(--ink-3);cursor:progress;transform:none}
+#root>button{width:100%}
+button.link{min-height:0;padding:0;margin-left:6px;border:0;background:none;color:var(--ink);font:500 13px var(--sans);text-decoration:underline;text-underline-offset:.22em;text-decoration-color:var(--rule-2)}
+button.link:hover{background:none;color:var(--signal-ink);text-decoration-color:var(--signal)}
+
+.card{display:flex;flex-direction:column}
+.card>p.muted{margin:0 0 4px;padding-bottom:14px;border-bottom:1px solid var(--rule-2)}
+label{display:block;margin-top:16px;font-size:14px;font-weight:600;color:var(--ink)}
+input{display:block;width:100%;min-height:48px;margin-top:6px;padding:0 14px;border:1px solid var(--ink);border-radius:3px;background:var(--paper);color:var(--ink);font:400 15px var(--mono);font-variation-settings:"wdth" 87.5;transition:box-shadow .2s var(--ease)}
+input:hover{box-shadow:inset 0 0 0 1px var(--ink)}
+input:focus{outline:none;box-shadow:inset 0 0 0 1px var(--ink),0 0 0 3px var(--signal-wash);border-color:var(--signal)}
+.card .row{display:flex;flex-direction:column;gap:8px;margin-top:22px}
+.card .row button{justify-content:flex-start;text-align:left;background:var(--paper);color:var(--ink)}
+.card .row button:hover{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+.card .row button:nth-child(2){background:var(--ink);color:var(--paper)}
+.card .row button:nth-child(2):hover{background:var(--signal-ink);border-color:var(--signal-ink);color:#fff}
+.card .row button:disabled{background:var(--paper-3);border-color:var(--rule-2);color:var(--ink-3)}
+
+.keys{margin-top:20px;padding:18px;border:1px solid var(--ok);border-radius:3px;background:var(--ok-wash);font-size:14px;color:var(--ink-2)}
+.keys b{display:block;margin-bottom:4px;font-size:16px;color:var(--ok)}
+.key{display:flex;gap:8px;align-items:stretch;margin:10px 0}
+.key code{flex:1;min-width:0;padding:11px 12px;border-radius:3px;background:var(--ink);color:var(--paper);font:400 12.5px/1.5 var(--mono);overflow-wrap:anywhere}
+.keys button{min-height:44px;padding:0 16px;font-size:14px}
+pre{margin:12px 0 0;padding:14px;border-radius:3px;background:var(--ink);color:#d9d5c9;font:400 12px/1.65 var(--mono);white-space:pre-wrap;overflow-wrap:anywhere}
+
+.card ul{margin:18px 0 0;padding:0;list-style:none;font-size:14px;color:var(--ink-2)}
+.card ul:empty{display:none}
+.card ul li{position:relative;padding:9px 0 9px 20px;border-top:1px solid var(--rule)}
+.card ul li::before{content:"";position:absolute;left:0;top:16px;width:8px;height:8px;background:var(--ink)}
+.card ul li a{font-size:13px}
+@media (max-width:520px){.nav .hide-s{display:none}#root{padding:18px}.panel-h{padding:12px 18px}}
+</style></head><body><div class="wrap">
+<header class="top"><a class="brand" href="/" aria-label="streampay-402 home"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="3" fill="#16140f"/><path d="M4 16h3v-4h3v-4h3v4h3v4h4" stroke="#e8461e" stroke-width="2.2" fill="none" stroke-linejoin="round"/></svg><span class="wm">streampay<span>-402</span></span></a>
+<nav class="nav" aria-label="Primary"><a class="hide-s" href="/">How it works</a><a href="/demo">Live demo</a></nav></header>
+<main class="shell">
+<div class="intro">
+<h1>Sell your agent service <span>by the second.</span></h1>
+<p class="sub">Sign up or log in with email. Then register your service on Monad and get Stripe-style <span class="mono">pk_</span>/<span class="mono">sk_</span> keys.</p>
+</div>
+<div class="panel" aria-labelledby="panel-h">
+<div class="panel-h"><span id="panel-h" style="font:inherit;color:inherit"><i aria-hidden="true"></i>Sign up or log in</span><span>ServiceRegistry</span></div>
+<div id="root"></div>
+</div>
+<div class="details">
+<ol class="get">
+<li><b>An embedded wallet</b>Email login through Privy. No extension, no seed phrase.</li>
+<li><b>Your terms, onchain</b>A price per second, stored in the ServiceRegistry contract.</li>
+<li><b>A key pair</b>The secret key is generated in your browser; only its hash goes onchain.</li>
+</ol>
+<div class="trust"><span>Monad testnet</span><span>Free testnet gas in step 1</span></div>
+</div>
+</main>
+<footer class="foot"><span>streampay-402 · MIT · built for Monad Metropolis</span><nav aria-label="Footer"><a href="/">Home</a><a href="/demo">Live demo</a><a href="https://github.com/DavidGutierrez94/streampay-402">GitHub</a></nav></footer>
+</div>
+<script type="module" src="/onboard.js"></script></body></html>

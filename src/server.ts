@@ -41,7 +41,9 @@ async function readStream(id: bigint) {
 }
 
 const app = new Hono();
-app.get("/", (c) => c.html(Bun.file("web/index.html").text()));
+app.get("/", (c) => c.html(Bun.file("web/landing.html").text()));
+app.get("/demo", (c) => c.html(Bun.file("web/index.html").text()));
+app.get("/theme.css", () => new Response(Bun.file("web/theme.css"), { headers: { "content-type": "text/css" } }));
 app.route("/api/registry", registry);   // onboarding: ServiceRegistry + pk_/sk_ keys
 app.get("/onboard", (c) => c.html(Bun.file("web/onboard.html").text()));
 app.get("/onboard.js", () => new Response(Bun.file("web/onboard.js"), { headers: { "content-type": "text/javascript" } }));

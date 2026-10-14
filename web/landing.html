@@ -1,0 +1,314 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>streampay-402 · Pay only for the time you actually use</title>
+<meta name="description" content="Per-second onchain billing on Monad, as an x402 add-on. For anything metered by time: compute, APIs, GPUs, streams, rentals. AI agents are the first use case.">
+<meta name="theme-color" content="#f0f0eb">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='3' fill='%2316140f'/%3E%3Cpath d='M4 16h3v-4h3v-4h3v4h3v4h4' stroke='%23e8461e' stroke-width='2.2' fill='none' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=Martian+Mono:wdth,wght@87.5..112.5,400..600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/theme.css">
+<style>
+/* ---------- hero ---------- */
+.hero{padding:clamp(36px,6vw,72px) 0 0}
+h1{margin:0;max-width:14ch;font-size:clamp(42px,7.6vw,92px);line-height:.94;font-weight:800;letter-spacing:-.035em;font-variation-settings:"wdth" 118;text-wrap:balance}
+h1 .hit{color:var(--signal)}
+.hero-body{display:grid;grid-template-columns:1fr;gap:36px;margin-top:clamp(28px,4vw,48px)}
+@media (min-width:980px){.hero-body{grid-template-columns:minmax(0,4fr) minmax(0,8fr);gap:56px;align-items:start}}
+.what{margin:0 0 14px;max-width:26ch;font-size:clamp(21px,2.2vw,26px);line-height:1.2;font-weight:700;letter-spacing:-.015em;font-variation-settings:"wdth" 108;text-wrap:balance}
+.lede{margin:0;max-width:44ch;font-size:clamp(17px,1.6vw,19px);line-height:1.5;color:var(--ink-2);text-wrap:pretty}
+.lede strong{color:var(--ink);font-weight:600}
+.ctas{display:flex;flex-wrap:wrap;gap:10px;margin-top:28px}
+.aside-facts{margin:36px 0 0;padding:0;list-style:none;border-top:1px solid var(--rule-2);font-size:14px;color:var(--ink-2)}
+.aside-facts li{display:flex;justify-content:space-between;gap:16px;padding:11px 0;border-bottom:1px solid var(--rule)}
+.aside-facts b{font:500 12.5px/1.6 var(--mono);color:var(--ink);text-align:right}
+@media (max-width:979px){.aside-facts{display:none}}
+
+/* ---------- instrument ---------- */
+.case-h{margin:0;max-width:none;font-size:clamp(20px,2vw,24px);line-height:1.15;font-weight:700;letter-spacing:-.015em;font-variation-settings:"wdth" 110}
+.case-p{margin:6px 0 16px;max-width:56ch;font-size:15px;color:var(--ink-2)}
+.meter{border:1px solid var(--ink);border-radius:4px;background:var(--paper-2);box-shadow:0 1px 0 var(--ink),0 22px 40px -28px rgba(22,20,15,.45)}
+.readout{display:grid;grid-template-columns:1fr auto;gap:6px 20px;align-items:end;padding:18px clamp(16px,3vw,26px) 16px;background:var(--ink);color:var(--paper);border-radius:3px 3px 0 0}
+.readout .lbl{grid-column:1/-1;display:flex;justify-content:space-between;gap:12px;font-size:13px;color:#b9b4a6}
+.count{font:500 clamp(30px,6.4vw,58px)/1 var(--mono);font-variation-settings:"wdth" 87.5;letter-spacing:-.04em;font-variant-numeric:tabular-nums;white-space:nowrap;color:#fff}
+.count .z{color:#77736a}
+.count small{margin-left:.35em;font-size:.32em;letter-spacing:0;color:#b9b4a6}
+.clock{font:400 13px/1.4 var(--mono);white-space:nowrap;color:#b9b4a6;text-align:right;font-variant-numeric:tabular-nums}
+.clock b{display:block;font-weight:500;font-size:15px;color:var(--paper)}
+@media (max-width:520px){.readout{grid-template-columns:1fr}.clock{display:flex;gap:12px;align-items:baseline;text-align:left}}
+.replay{display:inline-flex;align-items:center;gap:7px;padding:0;border:0;background:none;color:var(--paper);font:500 13px var(--sans);cursor:pointer;text-decoration:underline;text-underline-offset:.25em;text-decoration-color:rgba(239,236,227,.35)}
+.replay:hover{text-decoration-color:var(--signal)}
+.replay:focus-visible{outline-color:var(--signal)}
+
+.plot{position:relative;padding:20px clamp(12px,3vw,26px) 0}
+.plot svg{display:block;width:100%;height:clamp(180px,26vw,260px);overflow:visible}
+.plot .ax{stroke:var(--rule-2);stroke-width:1;vector-effect:non-scaling-stroke}
+.plot .grid{stroke:var(--rule);stroke-width:1;stroke-dasharray:2 4;vector-effect:non-scaling-stroke}
+.plot .stair{fill:none;stroke:var(--ink);stroke-width:1.5;vector-effect:non-scaling-stroke;stroke-linejoin:round}
+.plot .stair-a{fill:url(#hatch)}
+.plot .ramp{fill:none;stroke:var(--signal);stroke-width:3;vector-effect:non-scaling-stroke;stroke-linecap:round}
+.plot .ghost{opacity:.18}
+.plot .head{stroke:var(--ink);stroke-width:1;vector-effect:non-scaling-stroke}
+.tape{height:14px;margin:0 clamp(12px,3vw,26px);border-top:1px solid var(--ink);background:repeating-linear-gradient(90deg,var(--ink-3) 0 1px,transparent 1px 10px) top/100% 6px no-repeat,repeating-linear-gradient(90deg,var(--ink) 0 1px,transparent 1px 50px) top/100% 12px no-repeat}
+.tape-l{display:flex;justify-content:space-between;margin:4px clamp(12px,3vw,26px) 0;font:400 11.5px/1 var(--mono);color:var(--ink-3)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 22px;padding:14px clamp(16px,3vw,26px) 0;font-size:13.5px;color:var(--ink-2)}
+.legend span{display:inline-flex;align-items:center;gap:8px}
+.sw{width:22px;height:3px;background:var(--signal)}
+.sw.h{height:12px;border:1.5px solid var(--ink);background:repeating-linear-gradient(-45deg,var(--ink) 0 1px,transparent 1px 4px)}
+
+.totals{display:grid;grid-template-columns:1fr 1fr;margin:18px clamp(16px,3vw,26px) 0;border-top:1px solid var(--ink)}
+.totals div{padding:14px 0 16px}
+.totals div+div{padding-left:18px;border-left:1px solid var(--rule-2)}
+.totals dt{font-size:13.5px;color:var(--ink-2)}
+.totals dd{margin:4px 0 0;font:500 clamp(17px,2.2vw,22px)/1.2 var(--mono);font-variation-settings:"wdth" 87.5;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.totals .s dd{color:var(--signal-ink)}
+.totals .n{display:block;margin-top:4px;font:400 12px/1.4 var(--sans);color:var(--ink-3);letter-spacing:0}
+.verdict{margin:0 clamp(16px,3vw,26px);padding:14px 0;border-top:1px solid var(--rule-2);font-size:15px;color:var(--ink-2);text-wrap:pretty}
+.verdict b{color:var(--ink);font-weight:700;font-variation-settings:"wdth" 112}
+
+.controls{display:grid;grid-template-columns:1fr;gap:18px;padding:18px clamp(16px,3vw,26px) 22px;background:var(--paper);border-top:1px solid var(--ink);border-radius:0 0 3px 3px}
+@media (min-width:640px){.controls{grid-template-columns:1fr 1fr}.controls fieldset{grid-column:1/-1}}
+.ctl label,.controls legend{display:flex;justify-content:space-between;gap:12px;font-size:14px;font-weight:600;color:var(--ink)}
+.ctl output{font:500 13px/1.5 var(--mono);color:var(--signal-ink);font-weight:500}
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:32px;margin:6px 0 0;background:transparent;cursor:pointer}
+input[type=range]::-webkit-slider-runnable-track{height:2px;background:var(--ink)}
+input[type=range]::-moz-range-track{height:2px;background:var(--ink)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:26px;margin-top:-12px;border-radius:2px;background:var(--signal);border:2px solid var(--ink)}
+input[type=range]::-moz-range-thumb{width:10px;height:22px;border-radius:2px;background:var(--signal);border:2px solid var(--ink)}
+input[type=range]:focus-visible{outline-offset:2px}
+fieldset{margin:0;padding:0;border:0;min-width:0}
+.controls legend{width:100%;padding:0;margin-bottom:8px}
+.seg{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--ink);border-radius:3px;overflow:hidden}
+.seg label{position:relative;display:block;padding:10px 8px;text-align:center;font-size:14px;font-weight:600;cursor:pointer;line-height:1.2;transition:background .2s var(--ease),color .2s var(--ease)}
+.seg label+label{border-left:1px solid var(--ink)}
+.seg label small{display:block;margin-top:3px;font:400 11.5px/1.2 var(--mono);color:var(--ink-3)}
+.seg input{position:absolute;opacity:0;inset:0;margin:0;cursor:pointer}
+.seg label:hover{background:var(--paper-2)}
+.seg label:has(input:checked){background:var(--ink);color:var(--paper)}
+.seg label:has(input:checked) small{color:#b9b4a6}
+.seg label:has(input:focus-visible){outline:2px solid var(--signal);outline-offset:-4px}
+.assume{grid-column:1/-1;margin:0;font-size:13px;color:var(--ink-3)}
+
+/* ---------- sections ---------- */
+section{margin-top:clamp(80px,12vw,150px)}
+h2{margin:0 0 clamp(28px,4vw,44px);max-width:20ch;font-size:clamp(32px,4.6vw,56px);line-height:1;font-weight:800;letter-spacing:-.03em;font-variation-settings:"wdth" 114;text-wrap:balance}
+
+.uses{display:grid;grid-template-columns:1fr;margin:0;padding:0;list-style:none;border-top:1px solid var(--ink)}
+.uses li{display:grid;grid-template-columns:minmax(0,10rem) 1fr;gap:4px 20px;padding:18px 0;border-bottom:1px solid var(--rule-2)}
+.uses h3{margin:0;font-size:20px;line-height:1.2;font-weight:700;letter-spacing:-.015em;font-variation-settings:"wdth" 110}
+.uses .per{grid-column:1;font:400 12px/1.5 var(--mono);color:var(--ink-3)}
+.uses p{grid-column:2;grid-row:1/3;margin:0;max-width:48ch;color:var(--ink-2)}
+.uses .first h3{color:var(--signal-ink)}
+.uses .first .per{color:var(--signal-ink)}
+@media (max-width:600px){.uses li{grid-template-columns:1fr}.uses p{grid-column:1;grid-row:auto;margin-top:6px}}
+@media (min-width:900px){.uses{grid-template-columns:repeat(3,1fr);column-gap:40px}.uses li{grid-template-columns:1fr;align-content:start;padding:22px 0 26px}.uses p{grid-column:1;grid-row:auto;margin-top:8px}}
+.flow{position:relative;display:grid;grid-template-columns:1fr;margin:0;padding:0;list-style:none}
+.flow li{position:relative;padding:0 0 32px 30px;border-left:1px solid var(--ink)}
+.flow li:last-child{padding-bottom:0}
+.flow li::before{content:"";position:absolute;left:-6px;top:6px;width:11px;height:11px;background:var(--paper);border:1.5px solid var(--ink)}
+.flow li.live::before{background:var(--signal);border-color:var(--signal)}
+.flow .t{display:block;font:500 12.5px/1 var(--mono);color:var(--ink-3)}
+.flow h3{margin:8px 0 8px;font-size:clamp(22px,2.4vw,28px);line-height:1.1;font-weight:700;letter-spacing:-.02em;font-variation-settings:"wdth" 110}
+.flow p{margin:0;max-width:38ch;color:var(--ink-2)}
+.flow code{font:500 13px/1.5 var(--mono);color:var(--ink);background:var(--paper-2);padding:1px 5px;border-radius:2px}
+@media (min-width:860px){
+  .flow{grid-template-columns:1fr 1.25fr 1fr;border-top:1px solid var(--ink);padding-top:0}
+  .flow li{padding:30px 32px 0 0;border-left:0}
+  .flow li::before{left:0;top:-6px}
+  .flow li.live{background:linear-gradient(var(--signal),var(--signal)) top left/100% 3px no-repeat;margin-top:-1px}
+}
+
+.wire{display:grid;grid-template-columns:1fr;gap:32px;align-items:start}
+@media (min-width:900px){.wire{grid-template-columns:minmax(0,5fr) minmax(0,7fr);gap:56px}}
+.wire p{margin:0 0 14px;max-width:46ch;color:var(--ink-2)}
+pre{margin:0;padding:22px clamp(16px,3vw,26px);overflow-x:auto;background:var(--ink);color:#d9d5c9;border-radius:4px;font:400 13px/1.75 var(--mono);font-variation-settings:"wdth" 87.5}
+pre .c{color:#8d887b}pre .k{color:#fff;font-weight:600}pre .s{color:#ff8a63}
+
+.close{display:grid;grid-template-columns:1fr;gap:24px;align-items:end;padding-top:clamp(28px,4vw,40px);border-top:1px solid var(--ink)}
+@media (min-width:860px){.close{grid-template-columns:1fr auto}}
+.close h2{margin:0;max-width:16ch}
+.close p{margin:14px 0 0;color:var(--ink-2);max-width:48ch}
+.close .ctas{margin:0}
+@media (max-width:520px){.nav .hide-s{display:none}.ctas .btn{flex:1 1 100%}}
+</style></head><body><div class="wrap">
+<header class="top"><a class="brand" href="/" aria-label="streampay-402 home"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="3" fill="#16140f"/><path d="M4 16h3v-4h3v-4h3v4h3v4h4" stroke="#e8461e" stroke-width="2.2" fill="none" stroke-linejoin="round"/></svg><span class="wm">streampay<span>-402</span></span></a>
+<nav class="nav" aria-label="Primary"><a class="hide-s" href="/demo">Live demo</a><a class="hide-s" href="https://github.com/DavidGutierrez94/streampay-402">GitHub</a><a class="btn sm" href="/onboard">Sign up</a></nav></header>
+
+<main>
+<div class="hero">
+<h1>Pay only for the time you <span class="hit">actually use.</span></h1>
+<div class="hero-body">
+<div>
+<p class="what">Per-second onchain billing on Monad, built as an add-on to x402.</p>
+<p class="lede">Compute, APIs, GPUs, streams, rentals: if it’s metered by time, the payer locks a deposit in escrow, the meter runs <strong>every second</strong>, and whatever wasn’t used is refunded the moment it stops.</p>
+<div class="ctas"><a class="btn" href="/onboard">Register your service</a><a class="btn sec" href="/demo">Watch a live stream</a></div>
+<ul class="aside-facts" aria-label="Protocol facts">
+<li>Settles on<b>Monad testnet</b></li>
+<li>Payment scheme<b>stream-per-second</b></li>
+<li>What the payer owes<b>min(deposit, rate × t)</b></li>
+<li>Unused deposit<b>refunded on close</b></li>
+</ul>
+</div>
+
+<div class="case">
+<h2 class="case-h" id="calc-h">First use case: an AI agent paying for a session</h2>
+<p class="case-p">Set how long the agent works and what you charge. Compare streaming every second with a flat price per request.</p>
+<div class="meter" id="calc" role="group" aria-labelledby="calc-h">
+<div class="readout">
+<div class="lbl"><span>Streamed to the provider so far</span><button class="replay" id="replay" type="button"><svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 8a5.5 5.5 0 1 0 1.7-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M2 1.5v3.5h3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Replay</button></div>
+<div class="count" id="count" aria-hidden="true">0.000000<small>MON</small></div>
+<div class="clock"><b id="clock">00:00</b><span id="speed">×200 time-lapse</span></div>
+</div>
+
+<div class="plot">
+<svg id="svg" viewBox="0 0 600 240" preserveAspectRatio="none" role="img" aria-labelledby="plot-d">
+<desc id="plot-d">Cumulative cost over the session: a smooth per-second line against a per-request staircase.</desc>
+<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="1" height="6" fill="rgba(22,20,15,.18)"/></pattern>
+<clipPath id="clip"><rect id="clipr" x="0" y="-10" width="0" height="260"/></clipPath></defs>
+<line class="grid" x1="0" x2="600" y1="60" y2="60"/><line class="grid" x1="0" x2="600" y1="120" y2="120"/><line class="grid" x1="0" x2="600" y1="180" y2="180"/>
+<g class="ghost" aria-hidden="true"><use href="#stair"/><use href="#ramp"/></g>
+<g clip-path="url(#clip)"><path class="stair-a" id="stairA"/><path class="stair" id="stair"/><path class="ramp" id="ramp"/></g>
+<line class="head" id="head" x1="0" x2="0" y1="0" y2="240"/>
+</svg>
+</div>
+<div class="tape" aria-hidden="true"></div>
+<div class="tape-l" aria-hidden="true"><span>0</span><span id="tEnd">20:00</span></div>
+<div class="legend" aria-hidden="true"><span><i class="sw"></i>Per second (streampay)</span><span><i class="sw h"></i>Flat price per request</span></div>
+
+<dl class="totals">
+<div class="s"><dt>Streamed per second</dt><dd id="totS">—</dd><span class="n" id="nS"></span></div>
+<div><dt>Billed per request</dt><dd id="totR">—</dd><span class="n" id="nR"></span></div>
+</dl>
+<p class="verdict" id="verdict" aria-live="polite"></p>
+
+<form class="controls" id="ctl" onsubmit="return false">
+<div class="ctl"><label for="len">Session length <output id="lenO" for="len">20 min</output></label><input id="len" type="range" min="0" max="11" step="1" value="6"></div>
+<div class="ctl"><label for="rate">Your rate <output id="rateO" for="rate">0.0001 MON/s</output></label><input id="rate" type="range" min="0" max="6" step="1" value="3"></div>
+<fieldset><legend>How the agent uses it</legend>
+<div class="seg">
+<label><input type="radio" name="pat" value="3">Quick calls<small>~3 s each</small></label>
+<label><input type="radio" name="pat" value="15" checked>Mixed<small>~15 s each</small></label>
+<label><input type="radio" name="pat" value="40">Long jobs<small>~40 s each</small></label>
+</div></fieldset>
+<p class="assume">Back-to-back calls. A flat per-request price has to cover the slowest call, so it’s set at 60 s of your rate.</p>
+</form>
+</div>
+</div>
+</div>
+</div>
+
+<section aria-labelledby="uses-h">
+<h2 id="uses-h">Anything you meter by time.</h2>
+<ul class="uses">
+<li class="first"><h3>AI agents</h3><span class="per">per second of service</span><p>An agent opens a stream, works, and closes it. It never pays for a minute it didn’t use. Live on Monad testnet.</p></li>
+<li><h3>Compute</h3><span class="per">per second of runtime</span><p>Jobs that finish early stop paying early. No hourly rounding.</p></li>
+<li><h3>APIs</h3><span class="per">per second connected</span><p>Long-running and streaming endpoints, priced by how long they’re held open.</p></li>
+<li><h3>GPUs</h3><span class="per">per second of GPU time</span><p>Rent an accelerator for the length of the job, not a reserved block.</p></li>
+<li><h3>Streams</h3><span class="per">per second watched</span><p>Video, audio or data feeds that charge while someone is actually tuned in.</p></li>
+<li><h3>Rentals</h3><span class="per">per second borrowed</span><p>Anything lent out by the clock, settled the moment it’s returned.</p></li>
+</ul>
+</section>
+
+<section aria-labelledby="how-h">
+<h2 id="how-h">One escrow, one meter, one close.</h2>
+<ol class="flow">
+<li><span class="t">t = 0</span><h3>Open escrow</h3><p>A client, whether an agent, an app or a person, calls your endpoint and gets a <code>402</code> with your per-second terms. It locks a deposit in the StreamEscrow contract on Monad.</p></li>
+<li class="live"><span class="t">t = 1, 2, 3 …</span><h3>Stream per second</h3><p>Your service does the work while the meter runs. What’s owed is always <code>min(deposit, rate × elapsed)</code>, read from block time, never from a counter you have to trust.</p></li>
+<li><span class="t">t = end</span><h3>Claim and close</h3><p>You claim what accrued. The client closes the stream, and the unused part of its deposit is refunded in the same transaction.</p></li>
+</ol>
+</section>
+
+<section aria-labelledby="wire-h" class="wire">
+<div><h2 id="wire-h">Standard x402, plus a clock.</h2>
+<p>Clients that already speak x402, starting with AI agents, see a familiar <span class="mono">402 Payment Required</span>. The scheme says how to pay: open a stream, not a one-off transfer.</p>
+<p>Providers sign up once, register a price per second in the ServiceRegistry, and authenticate with <span class="mono">pk_</span>/<span class="mono">sk_</span> keys.</p></div>
+<pre aria-label="Example 402 response"><span class="c">$</span> curl $HOST/api/infer
+<span class="k">HTTP/1.1 402 Payment Required</span>
+x-payment-scheme: <span class="s">stream-per-second</span>
+x-rate-wei: 100000000000000
+x-escrow: 0x51ff…d525eb   <span class="c"># Monad testnet</span>
+
+<span class="c"># open stream → call → close → unused deposit refunded</span></pre>
+</section>
+
+<section class="close" aria-labelledby="close-h">
+<div><h2 id="close-h">Charge for time, not for guesses.</h2><p>Sign up with email, register your service and its price per second onchain, and get API keys in about a minute.</p></div>
+<div class="ctas"><a class="btn" href="/onboard">Create your account</a><a class="btn sec" href="/demo">See the live demo</a></div>
+</section>
+</main>
+
+<footer class="foot"><span>streampay-402 · MIT · built for Monad Metropolis</span><nav aria-label="Footer"><a href="/demo">Live demo</a><a href="/onboard">Sign up</a><a href="https://github.com/DavidGutierrez94/streampay-402">GitHub</a></nav></footer>
+</div>
+
+<script>
+(() => {
+  const LEN = [30, 60, 120, 300, 600, 900, 1200, 1800, 2700, 3600, 5400, 7200];
+  const RATE = [0.00001, 0.00002, 0.00005, 0.0001, 0.0002, 0.0005, 0.001];
+  const CAP = 60, PLAY_MS = 6500, W = 600, H = 240;
+  const $ = (id) => document.getElementById(id);
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  const dur = (s) => s < 60 ? s + " s" : s < 3600 ? s / 60 + " min" : (s / 3600) + " h";
+  const clock = (s) => { s = Math.floor(s); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60, p = (n) => String(n).padStart(2, "0"); return (h ? h + ":" + p(m) : p(m)) + ":" + p(x); };
+  const mon = (v) => v < 10 ? v.toFixed(6) : v.toFixed(3);
+  const rateTxt = (r) => +r.toPrecision(2) + " MON/s";
+
+  // Deterministic call lengths so the staircase is stable across replays.
+  function model() {
+    const L = LEN[$("len").value], rate = RATE[$("rate").value];
+    const mean = +document.querySelector("input[name=pat]:checked").value;
+    let seed = 2654435761 ^ mean, t = 0; const calls = [];
+    const rnd = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296;
+    while (t < L) { calls.push(t); t += Math.min(CAP, Math.max(1, Math.round(mean * (0.35 + 1.3 * rnd())))); }
+    const flat = rate * CAP;
+    return { L, rate, flat, calls, stream: rate * L, perReq: calls.length * flat };
+  }
+
+  let m, start = 0, raf = 0;
+  function draw() {
+    m = model();
+    const top = Math.max(m.stream, m.perReq) * 1.04, y = (v) => (H - (v / top) * H).toFixed(2), x = (t) => ((t / m.L) * W).toFixed(2);
+    let d = "M0 " + H;
+    m.calls.forEach((c, i) => { d += " H" + x(c) + " V" + y((i + 1) * m.flat); });
+    d += " H" + W;
+    $("stair").setAttribute("d", d);
+    $("stairA").setAttribute("d", d + " V" + H + " Z");
+    $("ramp").setAttribute("d", "M0 " + H + " L" + W + " " + y(m.stream));
+    $("tEnd").textContent = clock(m.L);
+    $("speed").textContent = "×" + Math.round(m.L / (PLAY_MS / 1000)) + " time-lapse";
+    $("lenO").textContent = dur(m.L);
+    $("rateO").textContent = rateTxt(m.rate);
+    $("totS").textContent = mon(m.stream) + " MON";
+    $("nS").textContent = m.L.toLocaleString() + " s × " + rateTxt(m.rate);
+    $("totR").textContent = mon(m.perReq) + " MON";
+    $("nR").textContent = m.calls.length.toLocaleString() + " calls × " + +m.flat.toPrecision(2) + " MON";
+    const pct = Math.round((1 - m.stream / m.perReq) * 100);
+    $("verdict").innerHTML = pct > 0
+      ? "Streaming costs the agent <b>" + pct + "% less</b> for the same " + dur(m.L) + " of work, and you still earn every second you serve."
+      : "Here the two match: every call runs the full 60 s, so a flat price is already fair.";
+    $("len").setAttribute("aria-valuetext", dur(m.L));
+    $("rate").setAttribute("aria-valuetext", rateTxt(m.rate));
+  }
+
+  function paint(p) {
+    const t = p * m.L, v = m.rate * t, s = mon(v), i = s.search(/[1-9]/);
+    $("count").innerHTML = (i < 0 ? '<span class="z">' + s + "</span>" : '<span class="z">' + s.slice(0, i) + "</span>" + s.slice(i)) + "<small>MON</small>";
+    $("clock").textContent = clock(t) + " / " + clock(m.L);
+    $("clipr").setAttribute("width", (p * W + 2).toFixed(1));
+    $("head").setAttribute("x1", (p * W).toFixed(1)); $("head").setAttribute("x2", (p * W).toFixed(1));
+  }
+
+  function play() {
+    cancelAnimationFrame(raf);
+    if (reduce) return paint(1);
+    start = performance.now();
+    const step = (now) => { const p = Math.min(1, (now - start) / PLAY_MS); paint(p); if (p < 1) raf = requestAnimationFrame(step); };
+    raf = requestAnimationFrame(step);
+  }
+
+  let deb;
+  $("ctl").addEventListener("input", () => { draw(); paint(0); clearTimeout(deb); deb = setTimeout(play, 180); });
+  $("replay").addEventListener("click", play);
+  draw(); paint(0);
+  new IntersectionObserver((e, o) => { if (e[0].isIntersecting) { play(); o.disconnect(); } }, { threshold: .35 }).observe($("calc"));
+})();
+</script>
+</body></html>
