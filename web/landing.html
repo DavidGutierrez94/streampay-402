@@ -1,0 +1,58 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark">
+<title>streampay-402 · per-second billing for agent services</title>
+<meta name="description" content="Bill AI agents by the second over x402 on Monad. Escrow streams, unused deposit refunded.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%23836EF9'/%3E%3Cpath d='M5.5 14c2.2-4.4 4.3-4.4 6.5 0s4.3 4.4 6.5 0' stroke='white' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/theme.css">
+<style>
+.hero{padding:56px 0 40px;max-width:760px}
+h1{font-size:clamp(36px,8vw,64px);line-height:1.04;letter-spacing:-.035em;font-weight:600;margin:20px 0 18px}
+h1 em{font-style:normal;color:var(--accent-text)}
+.lede{color:var(--muted);font-size:clamp(16px,2.4vw,18px);max-width:600px;margin:0 0 28px}
+.ctas{display:flex;flex-wrap:wrap;gap:10px}
+.ticker{margin:44px 0 0;padding:20px 22px;display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:12px}
+.ticker .n{font:500 clamp(30px,7vw,44px)/1 var(--mono);letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.ticker .n small{font-size:.4em;color:var(--muted);margin-left:6px}
+.ticker .s{color:var(--muted);font-size:13px}
+h2{font-size:clamp(22px,4vw,28px);letter-spacing:-.02em;font-weight:600;margin:8px 0 20px}
+section{padding-top:56px}
+.grid3{display:grid;grid-template-columns:1fr;gap:12px}
+@media(min-width:760px){.grid3{grid-template-columns:repeat(3,1fr)}}
+.grid3 .card{padding:22px}
+.num{display:grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--accent-soft);color:var(--accent-text);font:500 12px var(--mono);box-shadow:inset 0 0 0 1px rgba(131,110,249,.35)}
+.grid3 h3{font-size:16px;margin:14px 0 6px;font-weight:600;letter-spacing:-.01em}
+.grid3 p{margin:0;color:var(--muted);font-size:14px}
+pre{margin:0;padding:18px 20px;overflow-x:auto;font:13px/1.6 var(--mono);color:var(--muted)}
+pre b{color:var(--accent-text);font-weight:500}pre i{color:var(--green);font-style:normal}
+.cta{margin-top:56px;padding:32px 24px;text-align:center}
+.cta p{color:var(--muted);margin:0 0 20px}
+@media(max-width:480px){.nav a.ghost{display:none}.ctas .btn{flex:1}}
+</style></head><body><div class="wrap">
+<header class="top"><a class="brand" href="/" aria-label="streampay-402 home"><svg width="26" height="26" viewBox="0 0 24 24" aria-hidden="true"><rect width="24" height="24" rx="6" fill="#836EF9"/><path d="M5.5 14c2.2-4.4 4.3-4.4 6.5 0s4.3 4.4 6.5 0" stroke="#fff" stroke-width="2.2" fill="none" stroke-linecap="round"/></svg><span style="color:var(--text)">streampay<span>-402</span></span></a>
+<nav class="nav"><a class="ghost" href="/demo">Live demo</a><a class="ghost" href="https://github.com/DavidGutierrez94/streampay-402">GitHub</a><a class="btn sm" href="/onboard">Sign up</a></nav></header>
+<main>
+<div class="hero"><span class="pill"><i></i>Live on Monad testnet · x402</span>
+<h1>Bill agents <em>by the second</em>, not by the request.</h1>
+<p class="lede">streampay-402 adds per-second streaming payments to x402. Agents lock a deposit in escrow, your service meters usage every second, and anything unused is refunded onchain the moment the session ends.</p>
+<div class="ctas"><a class="btn" href="/onboard">Get started, free</a><a class="btn sec" href="/demo">Watch it stream</a></div>
+<div class="card ticker" aria-label="example pricing"><div><div class="eyebrow">Example session</div><div class="n">0.000100<small>MON / sec</small></div></div><div class="s">42s used · deposit 0.006 MON<br>paid 0.0042 · <span style="color:var(--green)">refunded 0.0018</span></div></div>
+</div>
+<section><div class="eyebrow">How it works</div><h2>Three steps, all onchain.</h2>
+<div class="grid3">
+<div class="card"><span class="num">1</span><h3>Sign up</h3><p>Email login via Privy creates an embedded wallet on Monad. No extension, no seed phrase.</p></div>
+<div class="card"><span class="num">2</span><h3>Register your service</h3><p>Set a price per second. The ServiceRegistry stores your terms and a hash of your secret key.</p></div>
+<div class="card"><span class="num">3</span><h3>Get paid per second</h3><p>Use Stripe-style <span class="mono">pk_</span>/<span class="mono">sk_</span> keys. Agents hit a 402, open a stream, and settle with refunds.</p></div>
+</div></section>
+<section><div class="eyebrow">For agents</div><h2>Standard x402, plus a clock.</h2>
+<div class="card"><pre><i>$</i> curl $HOST/api/infer
+<b>HTTP/1.1 402 Payment Required</b>
+x-payment-scheme: stream-per-second
+x-rate-wei: 100000000000000
+x-escrow: 0x51ff…d525eb  <span>(Monad testnet)</span>
+
+<i>#</i> open stream → call → close → unused deposit refunded</pre></div></section>
+<div class="card cta"><h2 style="margin-top:0">Price your agent by the second.</h2><p>Register onchain and get API keys in under a minute.</p><a class="btn" href="/onboard">Create your account</a></div>
+</main>
+<footer class="foot"><span>streampay-402 · MIT · built for Monad Metropolis</span><span><a href="/demo">Demo</a> · <a href="https://github.com/DavidGutierrez94/streampay-402">Source</a></span></footer>
+</div></body></html>
