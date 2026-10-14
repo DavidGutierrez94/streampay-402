@@ -8,7 +8,7 @@ import art from "./registry-artifact.json";
 
 export const registryAbi = art.abi as any;
 export const registryBytecode = art.bytecode as Hex;
-export const REGISTRY = process.env.REGISTRY_ADDRESS as `0x${string}`;
+export const REGISTRY = (process.env.REGISTRY_ADDRESS ?? "0xdaeddd6a68bbea02c58dd0349797e8847c3fa797") as `0x${string}`;
 const ESCROW = process.env.ESCROW_ADDRESS as `0x${string}`;
 
 export const newSecretKey = () => "sk_test_" + Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex");

@@ -36,3 +36,17 @@ In the Privy dashboard, add the live demo URL to **Allowed origins**.
 
 ## Demo script addition (about 30s, insert before the agent run)
 "First a provider signs up. I log in with my email through Privy, which gives me an embedded wallet on Monad. I grab testnet gas, then register a GPU session at 0.001 MON per second. That's an onchain tx, here on monadscan. I get Stripe-style keys: a publishable `pk_test` for agents and a secret `sk_test` that's shown once. Only its hash lives onchain. An agent takes the pk, gets the per-second terms, opens a stream, and the meter runs."
+
+## End-to-end in 3 commands
+
+Provider and buyer on Monad testnet. The buyer is a real autonomous agent paying per second.
+
+```bash
+bun run server                        # 1. serves /onboard and auto-mounts every registered service at /api/svc/:id
+# sign up at http://localhost:4020/onboard -> you get pk_test_N + sk_test_...
+bun run agent pk_test_N               # 2. agent: registry lookup -> 402 -> open stream -> metered calls -> close + refund
+PROVIDER_PK=pk_test_N PROVIDER_SK=sk_test_... bun run provider   # 3. (optional) your own server, gated by your sk_
+bun run agent pk_test_N http://localhost:4030/api/work           #    ...and the agent pays it directly
+```
+
+The agent checks the 402 terms against the onchain registry and the pinned escrow, and prints monadscan links for open/close. Example run (service #2): [register](https://testnet.monadscan.com/tx/0x48e62350412c83d87e130011b711c44c6e64dfe030ca765633262771d557148d) · [open](https://testnet.monadscan.com/tx/0x961f71bb9b38d8d4bc31dea3f67e1e1e75f7cd63a35a0c4e42d886f2ae15d8f2) · [provider claim](https://testnet.monadscan.com/tx/0x2414fd86473b414cb653793abae594881f1b8c74141ff060b7cb99d22b337df6) · [close + refund](https://testnet.monadscan.com/tx/0x3df27b331dde7b54d95d082192c4fa2bf863abf4d5e518d183aa979e3d965c5f) (paid 0.0025 MON, refunded 0.0105 MON).
