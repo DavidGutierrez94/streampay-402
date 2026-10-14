@@ -2,7 +2,7 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { parseEther, formatEther } from "viem";
-import { pub, abi, txUrl, addrUrl, CHAIN_ID } from "./chain";
+import { pub, abi, txUrl, addrUrl, CHAIN_ID, wallet } from "./chain";
 
 const ESCROW = process.env.ESCROW_ADDRESS as `0x${string}`;
 const PAYEE = process.env.PAYEE_ADDRESS as `0x${string}`;
@@ -59,6 +59,13 @@ app.get("/api/infer", async (c) => {
   push("verify", `stream #${sid} verified on-chain: deposit ${formatEther(s.deposit)} MON @ ${formatEther(s.rate)} MON/s`);
   current = { id: sid, ratePerSec: formatEther(s.rate), deposit: formatEther(s.deposit), start: s.start * 1000, tokens: 0 };
   const words = "the agent is renting inference by the second and every token you see is metered against a live on chain escrow on monad when the agent stops the meter stops and the unused deposit goes straight back".split(" ");
+  if (process.env.PAYEE_KEY) setTimeout(async () => {   // provider claims accrued earnings mid-stream
+    try {
+      const h = await wallet(process.env.PAYEE_KEY!).writeContract({ address: ESCROW, abi, functionName: "claim", args: [id], gas: 120000n });
+      const r = await pub.waitForTransactionReceipt({ hash: h });
+      push("claim", `provider claimed accrued earnings mid-stream (${r.status})`, txUrl(h));
+    } catch (e: any) { push("claim", "claim failed: " + e.shortMessage); }
+  }, 5000);
   return streamSSE(c, async (st) => {
     let i = 0, lastCheck = 0;
     let aborted = false;

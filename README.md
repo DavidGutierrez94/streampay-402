@@ -21,8 +21,15 @@ Per-second settlement only makes sense if blocks are fast and cheap enough that 
 Not a new protocol. A thin scheme on top of x402: same 402 handshake, same `accepts[]` shape, one extra scheme for time-metered resources. Per-request stays x402 `exact`; sessions use `stream-per-second`. EVM-generic (runs on any EVM chain).
 
 ## Deployment (Monad testnet, chainId 10143)
-- StreamEscrow: `DEPLOYED_ADDRESS_TBD`
-- Explorer: https://testnet.monadscan.com
+- StreamEscrow: [`0xda46725e9559d87963349570da491a8f08547d27`](https://testnet.monadscan.com/address/0xda46725e9559d87963349570da491a8f08547d27)
+- Deploy tx: [0xf3ed2bff…04ed](https://testnet.monadscan.com/tx/0xf3ed2bff1f3f142747130df4396636b1a9a1fa989b05e162ffb482511b3b04ed)
+
+### Live end-to-end run (stream #1, 0.001 MON/s, 0.06 MON budget, agent stopped after 12 s)
+| Step | Tx |
+| --- | --- |
+| Agent opens stream (0.06 MON deposit) | [0x5593ee4a…3b67](https://testnet.monadscan.com/tx/0x5593ee4a428fa3cd6f77c1878f369c793a35b5e0c8d44ec28cb4b90931aa3b67) |
+| Provider claims accrued earnings mid-stream | [0x5c7352ef…48da](https://testnet.monadscan.com/tx/0x5c7352ef7a2a321c41cc03c2913dca8e0001779209a07250e95f14964f8448da) |
+| Agent closes: 0.007 MON more to provider, 0.047 MON refunded in the same tx | [0x4837b24b…bb45](https://testnet.monadscan.com/tx/0x4837b24be1069f0ac47828ce22f89d4bcb90a9f139574504683133173bbabb45) |
 
 ## Run
 ```bash
