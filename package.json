@@ -21,6 +21,7 @@
     "server": "bun src/server.ts",
     "agent": "bun examples/agent.ts",
     "provider": "bun examples/provider.ts",
+    "test": "forge build --root contracts && bun test",
     "register": "bun src/onboard-demo.ts"
   }
 }

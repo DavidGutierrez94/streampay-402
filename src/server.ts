@@ -2,9 +2,12 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { parseEther, formatEther, verifyMessage } from "viem";
-import { pub, abi, txUrl, addrUrl, CHAIN_ID, wallet } from "./chain";
+import { pub, abi, txUrl, addrUrl, CHAIN_ID } from "./chain";
 import { registry } from "./registry";
+import { scheduleProviderClaim } from "./claim";
 import { serveMetered } from "./meter";
+import { accruedWei, applyEnvPolicy, beginSession, endSession, inferServiceId, policyBlock, publicPolicy } from "./policy";
+import { applyEnvWebhook, emitStreamEvent, streamPayload } from "./webhooks";
 
 const ESCROW = process.env.ESCROW_ADDRESS as `0x${string}`;
 const PAYEE = process.env.PAYEE_ADDRESS as `0x${string}`;
@@ -16,21 +19,27 @@ const log: Ev[] = [];
 const push = (kind: string, msg: string, link?: string) => { log.push({ t: Date.now(), kind, msg, link }); console.log(`[${kind}] ${msg} ${link ?? ""}`); };
 let current: { id: string; ratePerSec: string; deposit: string; start: number; tokens: number; stopped?: number } | null = null;
 
-const terms = () => ({
-  x402Version: 1,
-  accepts: [{
-    scheme: "stream-per-second",          // x402 add-on scheme: pay while you use
-    network: `eip155:${CHAIN_ID}`,
-    asset: "native:MON",
-    payTo: PAYEE,
-    escrow: ESCROW,
-    ratePerSec: RATE.toString(),
-    minDeposit: (RATE * 10n).toString(),
-    resource: "/api/infer",
-    description: "LLM-style token stream, billed per second of session time",
-    extra: { open: "StreamEscrow.open(payee, ratePerSec) payable", proofHeader: "X-PAYMENT-STREAM: <streamId>" },
-  }],
-});
+const terms = () => {
+  const policy = publicPolicy({ kind: "key", serviceId: inferServiceId() });
+  return {
+    x402Version: 1,
+    accepts: [{
+      scheme: "stream-per-second",          // x402 add-on scheme: pay while you use
+      network: `eip155:${CHAIN_ID}`,
+      asset: "native:MON",
+      payTo: PAYEE,
+      escrow: ESCROW,
+      ratePerSec: RATE.toString(),
+      minDeposit: (RATE * 10n).toString(),
+      resource: "/api/infer",
+      description: "LLM-style token stream, billed per second of session time",
+      extra: {
+        open: "StreamEscrow.open(payee, ratePerSec) payable", proofHeader: "X-PAYMENT-STREAM: <streamId>",
+        ...(policy ? { policy } : {}),
+      },
+    }],
+  };
+};
 
 async function readStream(id: bigint) {
   const s = (await pub.readContract({ address: ESCROW, abi, functionName: "streams", args: [id] })) as any[];
@@ -109,7 +118,6 @@ app.get("/api/svc/:id", (c) => {
 app.get("/api/terms", (c) => c.json(terms()));
 
 const sessions = new Set<string>();          // H-2: one live session per stream
-const claimScheduled = new Set<string>();    // M-4: at most one provider claim per stream
 const DEMO_TOKEN = process.env.DEMO_TOKEN ?? crypto.randomUUID();
 
 app.get("/api/infer", async (c) => {
@@ -132,28 +140,53 @@ app.get("/api/infer", async (c) => {
     push("reject", `stream ${sid} not acceptable (active=${s.active})`);
     return c.json({ error: "stream not funded/active", ...terms() }, 402);
   }
+  const opened = beginSession({
+    serviceId: inferServiceId(), payer: s.payer, streamId: sid, rate: s.rate, deposit: s.deposit, startSec: s.start, nowMs: Date.now(),
+  });
+  if (!opened.ok) { push("reject", `stream #${sid}: ${opened.error}`); return c.json({ error: opened.error, ...terms() }, opened.status); }
   push("verify", `stream #${sid} verified on-chain + payer signature: deposit ${formatEther(s.deposit)} MON @ ${formatEther(s.rate)} MON/s`);
   current = { id: sid, ratePerSec: formatEther(s.rate), deposit: formatEther(s.deposit), start: s.start * 1000, tokens: 0 };
   const words = "the agent is renting inference by the second and every token you see is metered against a live on chain escrow on monad when the agent stops the meter stops and the unused deposit goes straight back".split(" ");
-  if (process.env.PAYEE_KEY && !claimScheduled.has(sid)) {
-    claimScheduled.add(sid);
-    setTimeout(async () => {   // provider claims accrued earnings mid-stream
-      try {
-        const h = await wallet(process.env.PAYEE_KEY!).writeContract({ address: ESCROW, abi, functionName: "claim", args: [id], gas: 120000n });
-        const r = await pub.waitForTransactionReceipt({ hash: h });
-        push("claim", `provider claimed accrued earnings mid-stream (${r.status})`, txUrl(h));
-      } catch (e: any) { push("claim", "claim failed: " + (e.shortMessage ?? "error")); }
-    }, 5000);
+  const grant = opened.grant;
+  const base = { streamId: sid, payer: s.payer, payee: s.payee, ratePerSec: s.rate, deposit: s.deposit };
+  if (process.env.PAYEE_KEY) {
+    scheduleProviderClaim({
+      serviceId: inferServiceId(), streamId: id, payee: PAYEE, claimKey: process.env.PAYEE_KEY,
+      meta: { payer: s.payer, ratePerSec: s.rate, deposit: s.deposit },
+      onResult: (r) => {
+        if (r?.status === "success") push("claim", `provider claimed accrued earnings mid-stream (${formatEther(r.amount)} MON)`, txUrl(r.hash));
+        else push("claim", "claim failed");
+      },
+    });
   }
   sessions.add(sid);
+  emitStreamEvent(inferServiceId(), { type: "stream.opened", data: streamPayload(base) });
   const endAt = s.start * 1000 + Number((s.deposit * 1000n) / s.rate);   // local exhaustion bound (L-2)
+  let settled = false;
+  const finish = (reason: string) => {
+    if (settled) return;
+    settled = true;
+    sessions.delete(sid);
+    const at = Date.now();
+    const actual = accruedWei(s.rate, s.deposit, s.start, at);
+    endSession(grant.sessionKey, actual);
+    emitStreamEvent(inferServiceId(), { type: "stream.closed", data: streamPayload(base, { amount: actual.toString(), reason, elapsedSeconds: Math.max(0, Math.floor(at / 1000) - s.start) }) });
+  };
   return streamSSE(c, async (st) => {
+    let reason = "ended";
     try {
       let i = 0, lastCheck = 0, fails = 0;
       let aborted = false;
-      st.onAbort(() => { aborted = true; });
+      st.onAbort(() => { aborted = true; reason = "aborted"; });
       while (!aborted) {
+        const policyReason = policyBlock(grant, Date.now());
+        if (policyReason) {
+          reason = policyReason;
+          push("cutoff", `stream #${sid} ${policyReason} -> service cut off`);
+          await st.writeSSE({ event: "cutoff", data: policyReason }); break;
+        }
         if (Date.now() >= endAt) {
+          reason = "exhausted";
           push("cutoff", `stream #${sid} balance exhausted -> service cut off`);
           await st.writeSSE({ event: "cutoff", data: "exhausted" }); break;
         }
@@ -161,10 +194,11 @@ app.get("/api/infer", async (c) => {
           lastCheck = Date.now();
           const live = await readStream(id).catch(() => null);
           fails = live ? 0 : fails + 1;
-          if (fails >= 3) { push("cutoff", `stream #${sid} unverifiable (RPC) -> cut off`); await st.writeSSE({ event: "cutoff", data: "unverifiable" }); break; }
+          if (fails >= 3) { reason = "unverifiable"; push("cutoff", `stream #${sid} unverifiable (RPC) -> cut off`); await st.writeSSE({ event: "cutoff", data: "unverifiable" }); break; }
           if (live && !live.active) {
+            reason = live.stoppedAt ? "closed" : "exhausted";
             push("cutoff", `stream #${sid} ${live.stoppedAt ? "closed by payer" : "balance exhausted"} -> service cut off`);
-            await st.writeSSE({ event: "cutoff", data: live.stoppedAt ? "closed" : "exhausted" });
+            await st.writeSSE({ event: "cutoff", data: reason });
             break;
           }
         }
@@ -173,7 +207,7 @@ app.get("/api/infer", async (c) => {
         await st.sleep(200);
       }
       if (current?.id === sid) current.stopped = Date.now();
-    } finally { sessions.delete(sid); }
+    } finally { finish(reason); }
   });
 });
 
@@ -200,5 +234,7 @@ app.post("/api/run-agent", (c) => {
   return c.json({ ok: true });
 });
 
+applyEnvPolicy();
+applyEnvWebhook();
 export default { port: PORT, fetch: app.fetch, idleTimeout: 120 };
 console.log(`streampay-402 server on :${PORT}, escrow ${ESCROW}`);

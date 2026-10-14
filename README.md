@@ -64,6 +64,70 @@ sequenceDiagram
 ```
 Owed is computed from block timestamps only: `owed = min(deposit, rate × (now − start))`. No per-tick signatures, no offchain vouchers. Per-request calls stay on x402 `exact`; it is not a new protocol.
 
+The metering server also enforces spend caps before it serves a stream, and POSTs a signed webhook when that stream is accepted, when the provider claims, and when the session ends. See below.
+
+## Spend caps and session policies
+Caps are enforced in the metering path (`src/meter.ts` for `/api/svc/:id`, and `/api/infer`) against the deployed StreamEscrow v2. Nothing on chain has to change. Each limit is optional. When both a key policy and an agent policy apply, the stricter one wins.
+
+| Limit | What it does |
+|---|---|
+| Max total spend | Cumulative MON that publishable key, or that agent on that key, can be billed. An in-flight session reserves its ceiling so two streams cannot race past the cap. Close releases whatever was not actually accrued. Clearing the policy does not erase spend already booked. |
+| Max rate per second | A stream priced above this is rejected with 402. |
+| Max session duration | Whole seconds from the stream's on-chain start (the same clock as `owed`). The SSE cuts off with `policy-duration`. |
+
+Set them per API key (`subject: "key"`, every caller of that `pk_test_N`) or per agent (`subject: "agent"` plus the payer address, on that same key):
+
+```bash
+curl -X PUT http://localhost:4020/api/registry/policy \
+  -H "Authorization: Bearer sk_test_..." \
+  -H "X-Publishable-Key: pk_test_1" \
+  -H "content-type: application/json" \
+  -d '{"subject":"key","maxTotalSpend":"0.05","maxRatePerSec":"0.001","maxSessionDuration":30}'
+```
+
+Amounts are decimal MON strings. Omit a field for no cap on that dimension. `GET /api/registry/policy` and `GET /api/registry/policy?agent=0x…` return the caps plus `spent` and `reserved`. The public 402 terms include the key policy under `extra.policy` and do not include spend already booked.
+
+`/api/infer` uses service id `infer` unless `POLICY_SERVICE_ID` is set. `examples/provider.ts` applies the same env vars to its own service id, and exposes the same routes.
+
+- `POLICY_MAX_TOTAL_SPEND`, `POLICY_MAX_RATE_PER_SEC`, `POLICY_MAX_SESSION_SECONDS`
+- Cutoff events: `policy-duration`, `policy-spend`
+
+### On-chain caps (StreamEscrow v3, not deployed)
+`contracts/src/StreamEscrowV3.sol` is a new escrow with the v2 settlement rules plus optional policies. It is not an upgrade of v2, it is not deployed, and it has not been through the audit in [AUDIT.md](AUDIT.md). `src/deploy.ts` still deploys v2 only.
+
+A payer calls `setAgentPolicy(maxTotalSpend, maxRatePerSec, maxSessionDuration)`. A provider calls `registerKey(keyHash)` and `setKeyPolicy(...)`. `open` enforces the payer's policy when one is set. `openWithKey` also enforces the key policy. Both revert with `RateCap`, `DurationCap`, or `SpendCap`. The deposit is reserved against the cap; `close` books the amount actually owed and releases the refund back into the budget. Deploy it later as its own address (`forge create src/StreamEscrowV3.sol:StreamEscrowV3`) and do not point the live demo at it until you mean to.
+
+## Provider webhooks
+Configurable per service. The meter POSTs JSON when it accepts a stream (`stream.opened`), when a provider claim transaction pays out (`stream.claimed`), and when the metered session ends (`stream.closed`, with `reason` and the accrued `amount`). Delivery is asynchronous, so a slow receiver does not stall the stream.
+
+```bash
+curl -X PUT http://localhost:4020/api/registry/webhook \
+  -H "Authorization: Bearer sk_test_..." \
+  -H "X-Publishable-Key: pk_test_1" \
+  -H "content-type: application/json" \
+  -d '{"url":"https://example.com/hooks/streampay","secret":"replace-with-16-plus-random-chars"}'
+```
+
+`GET` returns the url and retry count, not the secret. Env for one service: `WEBHOOK_URL`, `WEBHOOK_SECRET`, optional `WEBHOOK_MAX_ATTEMPTS` (default 5, max 8) and `WEBHOOK_SERVICE_ID` (default `infer`, or `POLICY_SERVICE_ID`). The example provider binds these to its service id.
+
+The body is the raw JSON. The signature header is `X-StreamPay-Signature: t=<unix>,v1=<hex>` where `v1` is HMAC-SHA256 of `t + "." + rawBody` using the webhook secret. `X-StreamPay-Timestamp` and `X-StreamPay-Event` repeat the timestamp and the event name. Reject timestamps more than 5 minutes off.
+
+Retries: network errors, HTTP 408, 429, and any 5xx, with delays 200ms, 400ms, 800ms, 1600ms, 3200ms. Other 4xx are not retried. Redirects are not followed. `http://169.254.*` and the cloud metadata hostname are rejected so a provider cannot point the hook at a link-local address.
+
+```ts
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+function verify(secret: string, header: string, rawBody: string): boolean {
+  const parts = Object.fromEntries(header.split(",").map((p) => p.split("=")));
+  const expected = createHmac("sha256", secret).update(`${parts.t}.${rawBody}`).digest("hex");
+  const a = Buffer.from(expected);
+  const b = Buffer.from((parts.v1 ?? "").toLowerCase());
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+```
+
+Claims that emit `stream.claimed`: `/api/infer` when `PAYEE_KEY` is set, and `examples/provider.ts` when `PROVIDER_KEY` is the stream payee. A second claim on the same stream is skipped.
+
 ## Why Monad
 Per-second settlement only makes sense if opening and closing a session costs less than a few seconds of service. Monad's fast blocks and low fees make `open → use → close` feel instant, so the refund lands before the agent's next step.
 
@@ -83,6 +147,11 @@ Per-second settlement only makes sense if opening and closing a session costs le
 <details><summary>Superseded: StreamEscrow v1 (pre-audit, do not use)</summary>
 
 `0xda46725e9559d87963349570da491a8f08547d27`, replaced by v2 after the H-1 fix.
+</details>
+
+<details><summary>Not deployed: StreamEscrow v3 (spend caps)</summary>
+
+Source and tests only: `contracts/src/StreamEscrowV3.sol`. v2 above is the live escrow. v3 adds optional per-agent and per-key caps and is not deployed. See [Spend caps and session policies](#spend-caps-and-session-policies).
 </details>
 
 ## Onboarding
@@ -112,11 +181,14 @@ bun src/deploy.ts      # deploys StreamEscrow, writes ESCROW_ADDRESS to .env
 bun run build:onboard  # builds the /onboard page
 bun src/server.ts      # http://localhost:4020 (dashboard, /onboard, paid endpoint)
 bun src/agent.ts       # or click "Run agent"
+bun run test           # forge build, then policy, webhook, and metering tests
 ```
 <details><summary>Config knobs and local chain</summary>
 
 - `RATE_PER_SEC` (default 0.001 MON), `TASK_SECONDS` (default 12), `DEPOSIT_SECONDS` (default 60).
 - Security: `DEMO_TOKEN`, `MAX_RATE_PER_SEC` (0.001), `MAX_DEPOSIT` (0.1 MON), `TRUSTED_PAYEES`, `RUN_COOLDOWN_MS` (30000).
+- Server caps (optional): `POLICY_MAX_TOTAL_SPEND`, `POLICY_MAX_RATE_PER_SEC`, `POLICY_MAX_SESSION_SECONDS`, `POLICY_SERVICE_ID`.
+- Webhooks (optional): `WEBHOOK_URL`, `WEBHOOK_SECRET`, `WEBHOOK_MAX_ATTEMPTS`, `WEBHOOK_SERVICE_ID`.
 - Local: `anvil --block-time 1` with `RPC_URL=http://127.0.0.1:8545 CHAIN_ID=31337`.
 - Code map: `contracts/src/StreamEscrow.sol` (escrow + tests), `src/server.ts` (402 terms, onchain checks, metered SSE), `src/agent.ts` (agent client), `web/` (dashboard + onboarding UI).
 </details>
