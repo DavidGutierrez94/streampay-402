@@ -1,0 +1,23 @@
+<!doctype html><html><head><meta charset="utf-8"><title>streampay-402 · per-second x402 on Monad</title>
+<style>body{font:15px/1.5 ui-monospace,Menlo,monospace;background:#0e0b1a;color:#e8e4ff;max-width:860px;margin:40px auto;padding:0 16px}
+h1{color:#a78bfa;margin:0}.sub{color:#9a93c0}.big{font-size:56px;color:#34d399;margin:10px 0}.row{display:flex;gap:24px;flex-wrap:wrap}
+.card{background:#1a1530;border:1px solid #2e2650;border-radius:10px;padding:14px 18px;flex:1;min-width:180px}a{color:#c4b5fd}
+button{background:#7c3aed;color:#fff;border:0;border-radius:8px;padding:10px 18px;font:inherit;cursor:pointer}
+#log div{padding:3px 0;border-bottom:1px solid #221c3d}.k{color:#fbbf24}</style></head><body>
+<h1>streampay-402</h1><div class="sub">x402 add-on: pay per second for time-based agent services · Monad</div>
+<p>Escrow: <a id="esc" target="_blank"></a> · rate <span id="rate"></span> MON/s</p>
+<button onclick="fetch('/api/run-agent',{method:'POST'})">▶ Run agent</button>
+<div class="row"><div class="card">Session cost<div class="big" id="cost">0.000000</div>MON</div>
+<div class="card">Elapsed<div class="big" id="el">0s</div><span id="st">idle</span></div>
+<div class="card">Deposit / refund<div class="big" id="ref" style="font-size:28px">–</div>tokens: <span id="tok">0</span></div></div>
+<h3>Event log</h3><div id="log"></div>
+<script>
+let S=null;
+async function poll(){const s=await (await fetch('/api/state')).json();S=s;
+esc.textContent=s.escrow;esc.href=s.escrowUrl;rate.textContent=s.rate;
+log.innerHTML=s.log.map(e=>`<div><span class="k">${e.kind}</span> ${e.msg} ${e.link?`<a target=_blank href="${e.link}">tx ↗</a>`:''}</div>`).join('');}
+function tick(){if(S&&S.current){const c=S.current,end=c.stopped||Date.now();const secs=Math.max(0,(end-c.start)/1000);
+const cost=Math.min(+c.deposit,secs*+c.ratePerSec);cost_el.textContent=cost.toFixed(6);el.textContent=secs.toFixed(1)+'s';
+st.textContent=c.stopped?'stopped':'streaming…';tok.textContent=c.tokens;ref.textContent=c.deposit+' / '+(c.stopped?(c.deposit-cost).toFixed(6):'…');}}
+const cost_el=document.getElementById('cost');setInterval(poll,700);setInterval(tick,100);poll();
+</script></body></html>
