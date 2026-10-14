@@ -30,8 +30,8 @@ const data = (): StreamEventData => ({
   txHash: null,
 });
 
-beforeEach(() => {
-  resetWebhooksForTests();
+beforeEach(async () => {
+  await resetWebhooksForTests();
 });
 
 describe("signatures", () => {
@@ -51,7 +51,7 @@ describe("delivery", () => {
     const delays: number[] = [];
     const bodies: string[] = [];
     let calls = 0;
-    setWebhook("7", { url: "https://hooks.example/streampay", secret: SECRET, maxAttempts: 5 });
+    await setWebhook("7", { url: "https://hooks.example/streampay", secret: SECRET, maxAttempts: 5 });
     setWebhookDepsForTests({
       nowSec: () => NOW,
       sleep: async (ms) => { delays.push(ms); },
@@ -75,8 +75,8 @@ describe("delivery", () => {
 
   test("does not retry a 4xx or a redirect", async () => {
     const calls: number[] = [];
-    setWebhook("7", { url: "https://hooks.example/streampay", secret: SECRET });
-    setWebhook("8", { url: "https://hooks.example/elsewhere", secret: SECRET });
+    await setWebhook("7", { url: "https://hooks.example/streampay", secret: SECRET });
+    await setWebhook("8", { url: "https://hooks.example/elsewhere", secret: SECRET });
     setWebhookDepsForTests({
       nowSec: () => NOW,
       sleep: async () => { throw new Error("should not sleep"); },
@@ -94,7 +94,7 @@ describe("delivery", () => {
 
   test("gives up after the configured attempts", async () => {
     let calls = 0;
-    setWebhook("7", { url: "https://hooks.example/streampay", secret: SECRET, maxAttempts: 3 });
+    await setWebhook("7", { url: "https://hooks.example/streampay", secret: SECRET, maxAttempts: 3 });
     setWebhookDepsForTests({
       nowSec: () => NOW,
       sleep: async () => {},
@@ -110,7 +110,7 @@ describe("delivery", () => {
 
   test("disabled config and a missing config do not send", async () => {
     let calls = 0;
-    setWebhook("7", { url: "https://hooks.example/streampay", secret: SECRET, enabled: false });
+    await setWebhook("7", { url: "https://hooks.example/streampay", secret: SECRET, enabled: false });
     setWebhookDepsForTests({
       nowSec: () => NOW,
       sleep: async () => {},
@@ -122,23 +122,23 @@ describe("delivery", () => {
     expect(calls).toBe(0);
   });
 
-  test("save config hides the secret and rejects link-local urls", () => {
-    const saved = saveWebhookConfig("7", { url: "https://hooks.example/streampay", secret: SECRET, maxAttempts: 4 });
+  test("save config hides the secret and rejects link-local urls", async () => {
+    const saved = await saveWebhookConfig("7", { url: "https://hooks.example/streampay", secret: SECRET, maxAttempts: 4 });
     expect(saved.ok).toBe(true);
     if (!saved.ok) return;
     expect(saved.view).toEqual({ configured: true, serviceId: "7", url: "https://hooks.example/streampay", enabled: true, maxAttempts: 4 });
     expect(JSON.stringify(saved.view).includes(SECRET)).toBe(false);
-    expect(viewWebhook("7").configured).toBe(true);
-    expect(saveWebhookConfig("7", { url: "http://169.254.169.254/latest", secret: SECRET }).ok).toBe(false);
-    expect(saveWebhookConfig("7", { url: "https://hooks.example", secret: "short" }).ok).toBe(false);
-    expect(saveWebhookConfig("7", { url: "ftp://hooks.example", secret: SECRET }).ok).toBe(false);
+    expect((await viewWebhook("7")).configured).toBe(true);
+    expect((await saveWebhookConfig("7", { url: "http://169.254.169.254/latest", secret: SECRET })).ok).toBe(false);
+    expect((await saveWebhookConfig("7", { url: "https://hooks.example", secret: "short" })).ok).toBe(false);
+    expect((await saveWebhookConfig("7", { url: "ftp://hooks.example", secret: SECRET })).ok).toBe(false);
   });
 });
 
 describe("claim webhook", () => {
   test("emits stream.claimed only when the claim pays out", async () => {
     const types: string[] = [];
-    setWebhook("7", { url: "https://hooks.example/streampay", secret: SECRET });
+    await setWebhook("7", { url: "https://hooks.example/streampay", secret: SECRET });
     setWebhookDepsForTests({
       nowSec: () => NOW,
       sleep: async () => {},

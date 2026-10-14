@@ -1,5 +1,6 @@
 // Provider webhooks for stream open, claim, and close. HMAC-SHA256 over `${timestamp}.${rawBody}`.
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { getStore } from "./store";
 
 export type StreamEventName = "stream.opened" | "stream.claimed" | "stream.closed";
 
@@ -36,16 +37,17 @@ export type WebhookDeps = {
   nowSec: () => number;
 };
 
-const configs = new Map<string, WebhookConfig>();
 const inflight = new Set<Promise<void>>();
+const touched = new Set<string>();
 let deps: WebhookDeps | null = null;
 
 export function setWebhookDepsForTests(next: WebhookDeps | null): void {
   deps = next;
 }
 
-export function resetWebhooksForTests(): void {
-  configs.clear();
+export async function resetWebhooksForTests(): Promise<void> {
+  await Promise.all([...touched].map((id) => getStore().putWebhook(id, null)));
+  touched.clear();
   deps = null;
 }
 
@@ -110,16 +112,17 @@ function classifyUrl(raw: string): { ok: true; url: string } | { ok: false; erro
   return { ok: true, url: url.toString() };
 }
 
-export function setWebhook(
+export async function setWebhook(
   serviceId: string,
   input: { url: string; secret: string; enabled?: boolean; maxAttempts?: number },
-): { ok: true } | { ok: false; error: string } {
+): Promise<{ ok: true } | { ok: false; error: string }> {
   const url = classifyUrl(input.url);
   if (!url.ok) return url;
   if (input.secret.length < 16 || input.secret.length > 256) return { ok: false, error: "secret must be 16-256 characters" };
   const maxAttempts = input.maxAttempts ?? 5;
   if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 8) return { ok: false, error: "maxAttempts must be 1-8" };
-  configs.set(serviceId, { url: url.url, secret: input.secret, enabled: input.enabled ?? true, maxAttempts });
+  touched.add(serviceId);
+  await getStore().putWebhook(serviceId, { url: url.url, secret: input.secret, enabled: input.enabled ?? true, maxAttempts });
   return { ok: true };
 }
 
@@ -127,32 +130,32 @@ export type WebhookView =
   | { configured: false }
   | { configured: true; serviceId: string; url: string; enabled: boolean; maxAttempts: number };
 
-export function viewWebhook(serviceId: string): WebhookView {
-  const cfg = configs.get(serviceId);
+export async function viewWebhook(serviceId: string): Promise<WebhookView> {
+  const cfg = await getStore().getWebhook(serviceId);
   if (!cfg) return { configured: false };
   return { configured: true, serviceId, url: cfg.url, enabled: cfg.enabled, maxAttempts: cfg.maxAttempts };
 }
 
-export function saveWebhookConfig(
+export async function saveWebhookConfig(
   serviceId: string,
   body: unknown,
-): { ok: true; view: WebhookView } | { ok: false; error: string } {
+): Promise<{ ok: true; view: WebhookView } | { ok: false; error: string }> {
   if (!body || typeof body !== "object") return { ok: false, error: "bad json" };
   const rec = body as Record<string, unknown>;
   if (typeof rec.url !== "string" || typeof rec.secret !== "string") return { ok: false, error: "url and secret are required" };
   if (rec.enabled !== undefined && typeof rec.enabled !== "boolean") return { ok: false, error: "enabled must be a boolean" };
   if (rec.maxAttempts !== undefined && typeof rec.maxAttempts !== "number") return { ok: false, error: "maxAttempts must be 1-8" };
-  const saved = setWebhook(serviceId, {
+  const saved = await setWebhook(serviceId, {
     url: rec.url,
     secret: rec.secret,
     enabled: typeof rec.enabled === "boolean" ? rec.enabled : undefined,
     maxAttempts: typeof rec.maxAttempts === "number" ? rec.maxAttempts : undefined,
   });
   if (!saved.ok) return saved;
-  return { ok: true, view: viewWebhook(serviceId) };
+  return { ok: true, view: await viewWebhook(serviceId) };
 }
 
-export function applyEnvWebhook(serviceId?: string): void {
+export async function applyEnvWebhook(serviceId?: string): Promise<void> {
   const url = process.env.WEBHOOK_URL?.trim();
   const secret = process.env.WEBHOOK_SECRET;
   if (!url && !secret) return;
@@ -163,7 +166,7 @@ export function applyEnvWebhook(serviceId?: string): void {
   const rawAttempts = process.env.WEBHOOK_MAX_ATTEMPTS?.trim();
   const maxAttempts = rawAttempts ? Number(rawAttempts) : 5;
   const id = serviceId ?? (process.env.WEBHOOK_SERVICE_ID?.trim() || process.env.POLICY_SERVICE_ID?.trim() || "infer");
-  const saved = setWebhook(id, { url, secret, enabled: true, maxAttempts });
+  const saved = await setWebhook(id, { url, secret, enabled: true, maxAttempts });
   if (!saved.ok) console.log(`[webhook] ${saved.error}`);
   else console.log(`[webhook] configured for service ${id}`);
 }
@@ -211,16 +214,18 @@ async function deliver(cfg: WebhookConfig, event: StreamEvent): Promise<void> {
 }
 
 export function emitStreamEvent(serviceId: string, input: { type: StreamEventName; created?: number; data: StreamEventData }): void {
-  const cfg = configs.get(serviceId);
-  if (!cfg?.enabled) return;
-  const event: StreamEvent = {
-    id: `evt_${crypto.randomUUID()}`,
-    type: input.type,
-    created: input.created ?? (deps?.nowSec() ?? Math.floor(Date.now() / 1000)),
-    serviceId,
-    data: input.data,
-  };
-  const task = deliver(cfg, event);
+  const task = (async () => {
+    const cfg = await getStore().getWebhook(serviceId);
+    if (!cfg?.enabled) return;
+    const event: StreamEvent = {
+      id: `evt_${crypto.randomUUID()}`,
+      type: input.type,
+      created: input.created ?? (deps?.nowSec() ?? Math.floor(Date.now() / 1000)),
+      serviceId,
+      data: input.data,
+    };
+    await deliver(cfg, event);
+  })();
   inflight.add(task);
   void task.finally(() => inflight.delete(task));
 }

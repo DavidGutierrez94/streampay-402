@@ -12,6 +12,8 @@ import {
   loadActivity,
   loadProvider,
   makeClient,
+  readDashboardCache,
+  writeDashboardCache,
   payeeSet,
   type Activity,
   type ProviderSnapshot,
@@ -65,29 +67,54 @@ function SignedIn({
     setLoading(true);
     setErr(null);
     setActivityErr(null);
-    loadProvider(client, address, { registry, escrow })
-      .then((next) => {
-        if (cancel) return;
-        setSnap(next);
-        setActivity(null);
-        setLoading(false);
-        if (next.streams.length === 0) {
-          setActivity({ payouts: [], openTx: {}, closeTx: {}, truncated: false });
-          return;
-        }
-        loadActivity(client, escrow, next.streams, payeeSet(next))
-          .then((rows) => {
-            if (!cancel) setActivity(rows);
-          })
-          .catch((e: unknown) => {
-            if (!cancel) setActivityErr(message(e));
-          });
-      })
-      .catch((e: unknown) => {
-        if (cancel) return;
-        setErr(message(e));
-        setLoading(false);
-      });
+    const emptyActivity = (): Activity => ({ payouts: [], openTx: {}, closeTx: {}, truncated: false });
+    const show = (next: ProviderSnapshot, rows: Activity) => {
+      if (cancel) return;
+      setSnap(next);
+      setActivity(rows);
+      setLoading(false);
+    };
+    const loadChain = () =>
+      loadProvider(client, address, { registry, escrow })
+        .then((next) => {
+          if (cancel) return;
+          setSnap(next);
+          setActivity(null);
+          setLoading(false);
+          if (next.streams.length === 0) {
+            const rows = emptyActivity();
+            setActivity(rows);
+            void writeDashboardCache(address, next, rows);
+            return;
+          }
+          loadActivity(client, escrow, next.streams, payeeSet(next))
+            .then((rows) => {
+              if (cancel) return;
+              setActivity(rows);
+              void writeDashboardCache(address, next, rows);
+            })
+            .catch((e: unknown) => {
+              if (!cancel) setActivityErr(message(e));
+            });
+        })
+        .catch((e: unknown) => {
+          if (cancel) return;
+          setErr(message(e));
+          setLoading(false);
+        });
+    if (gen === 0) {
+      readDashboardCache(address)
+        .then((cached) => {
+          if (cancel) return;
+          if (cached) show(cached.snapshot, cached.activity);
+          else void loadChain();
+        })
+        .catch(() => {
+          if (!cancel) void loadChain();
+        });
+    } else {
+      void loadChain();
+    }
     return () => {
       cancel = true;
     };

@@ -1,6 +1,6 @@
 // Registry-backed x402 stream-per-second handler. The gate and per-second meter
-// live in @streampay-402/provider. This binds them to ServiceRegistry and enforces
-// session policy, provider claims, and webhooks.
+// live in @streampay-402/provider. This binds them to ServiceRegistry, enforces
+// session policy, and keeps the one-stream lock in the shared store.
 import type { Context } from "hono";
 import { streamSSE } from "hono/streaming";
 import { formatEther } from "viem";
@@ -10,11 +10,13 @@ import { CHAIN_ID, pub } from "./chain";
 import { scheduleProviderClaim, type ClaimResult } from "./claim";
 import { accruedWei, beginSession, endSession, policyBlock, publicPolicy } from "./policy";
 import { pkFor, readService, type ServiceView } from "./registry";
+import { getStore } from "./store";
 import { emitStreamEvent, streamPayload } from "./webhooks";
 
 export type { StreamView };
 
 const sessions = new Set<string>();
+const LOCK_TTL_SEC = 90;
 
 function escrowAddress(): `0x${string}` {
   const address = process.env.ESCROW_ADDRESS;
@@ -28,8 +30,9 @@ export async function readStream(id: bigint): Promise<StreamView> {
   return stream;
 }
 
-export function resetMeterSessionsForTests(): void {
+export async function resetMeterSessionsForTests(): Promise<void> {
   sessions.clear();
+  await getStore().resetSessionLocks();
 }
 
 type Produce = (i: number) => string;
@@ -64,7 +67,7 @@ export async function serveMetered(c: Context, serviceId: bigint, produce: Produ
     publishableKey: pkFor(serviceId),
     serviceName: svc.name,
   });
-  const policy = publicPolicy({ kind: "key", serviceId: serviceId.toString() });
+  const policy = await publicPolicy({ kind: "key", serviceId: serviceId.toString() });
   if (policy) terms.extra.policy = policy;
 
   const gate = createGate({ readStream: loadStream, sessions });
@@ -78,7 +81,14 @@ export async function serveMetered(c: Context, serviceId: bigint, produce: Produ
     return c.json(begun.body, begun.status);
   }
 
-  const opened = beginSession({
+  const lockName = `svc:${serviceId}:${begun.streamId}`;
+  const lock = await getStore().tryLock(lockName, LOCK_TTL_SEC);
+  if (!lock) {
+    gate.release(begun.streamId);
+    return c.json({ error: "stream already in use" }, 409);
+  }
+
+  const opened = await beginSession({
     serviceId: serviceId.toString(),
     payer: begun.stream.payer,
     streamId: begun.streamId,
@@ -89,6 +99,7 @@ export async function serveMetered(c: Context, serviceId: bigint, produce: Produ
   });
   if (!opened.ok) {
     gate.release(begun.streamId);
+    await getStore().unlock(lockName, lock);
     return c.json({ error: opened.error }, opened.status);
   }
 
@@ -116,13 +127,13 @@ export async function serveMetered(c: Context, serviceId: bigint, produce: Produ
   }
 
   let settled = false;
-  const finish = (reason: string) => {
+  const finish = async (reason: string) => {
     if (settled) return;
     settled = true;
     gate.release(begun.streamId);
     const at = now();
     const actual = accruedWei(begun.stream.rate, begun.stream.deposit, begun.stream.start, at);
-    endSession(grant.sessionKey, actual);
+    await endSession(grant.sessionKey, actual);
     emitStreamEvent(serviceKey, {
       type: "stream.closed",
       data: streamPayload(base, {
@@ -131,8 +142,11 @@ export async function serveMetered(c: Context, serviceId: bigint, produce: Produ
         elapsedSeconds: Math.max(0, Math.floor(at / 1000) - begun.stream.start),
       }),
     });
+    await getStore().unlock(lockName, lock);
   };
 
+  c.header("Cache-Control", "no-cache, no-transform");
+  c.header("X-Accel-Buffering", "no");
   try {
     return streamSSE(c, async (st) => {
       let reason = "ended";
@@ -147,18 +161,23 @@ export async function serveMetered(c: Context, serviceId: bigint, produce: Produ
           tickMs: options.tickMs,
           recheckMs: options.checkMs,
           now,
-          inspect: () => policyBlock(grant, now()),
+          inspect: async () => {
+            const blocked = policyBlock(grant, now());
+            if (blocked) return blocked;
+            if (!await getStore().refreshLock(lockName, lock, LOCK_TTL_SEC)) return "lock";
+            return null;
+          },
           sleep: options.sleep ?? (async (ms) => { await st.sleep(ms); }),
           write: async (event, data) => { await st.writeSSE({ event, data }); },
           isAborted: () => aborted,
         });
         if (aborted) reason = "aborted";
       } finally {
-        finish(reason);
+        await finish(reason);
       }
     });
   } catch (err) {
-    finish("error");
+    await finish("error");
     throw err;
   }
 }

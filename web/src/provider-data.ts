@@ -7,6 +7,7 @@ import {
   decodeEventLog,
   defineChain,
   http,
+  getAddress,
   isAddress,
   type Address,
   type Hex,
@@ -594,4 +595,150 @@ export function payeeSet(snapshot: ProviderSnapshot): Address[] {
   const set = new Set<string>([snapshot.address.toLowerCase()]);
   for (const s of snapshot.services) if (!sameAddr(s.payee, ZERO)) set.add(s.payee.toLowerCase());
   return [...set] as Address[];
+}
+
+type JsonSnapshot = {
+  address: Address;
+  balance: string;
+  blockNumber: string;
+  blockTime: string;
+  services: { id: string; name: string; owner: Address; payee: Address; ratePerSec: string; active: boolean }[];
+  streams: { id: string; payer: Address; payee: Address; ratePerSec: string; deposit: string; start: string; stoppedAt: string; claimed: string }[];
+  credit: string;
+};
+
+type JsonActivity = {
+  payouts: { kind: PayoutKind; streamId: string | null; amount: string; tx: Hex | null; blockNumber: string; time: string }[];
+  openTx: Record<string, Hex>;
+  closeTx: Record<string, Hex>;
+  truncated: boolean;
+};
+
+const PAYOUT_KINDS = new Set<PayoutKind>(["claim", "close", "credit", "withdraw"]);
+
+function digits(value: unknown): bigint | null {
+  return typeof value === "string" && /^\d+$/.test(value) ? BigInt(value) : null;
+}
+
+function addr(value: unknown): Address | null {
+  return typeof value === "string" && isAddress(value) ? getAddress(value) : null;
+}
+
+function hex(value: unknown): Hex | null {
+  return typeof value === "string" && /^0x[0-9a-fA-F]*$/.test(value) ? value as Hex : null;
+}
+
+export function snapshotToJson(snapshot: ProviderSnapshot): JsonSnapshot {
+  return {
+    address: snapshot.address,
+    balance: snapshot.balance.toString(),
+    blockNumber: snapshot.blockNumber.toString(),
+    blockTime: snapshot.blockTime.toString(),
+    credit: snapshot.credit.toString(),
+    services: snapshot.services.map((row) => ({
+      id: row.id.toString(),
+      name: row.name,
+      owner: row.owner,
+      payee: row.payee,
+      ratePerSec: row.ratePerSec.toString(),
+      active: row.active,
+    })),
+    streams: snapshot.streams.map((row) => ({
+      id: row.id.toString(),
+      payer: row.payer,
+      payee: row.payee,
+      ratePerSec: row.ratePerSec.toString(),
+      deposit: row.deposit.toString(),
+      start: row.start.toString(),
+      stoppedAt: row.stoppedAt.toString(),
+      claimed: row.claimed.toString(),
+    })),
+  };
+}
+
+export function snapshotFromJson(raw: unknown): ProviderSnapshot | null {
+  if (!raw || typeof raw !== "object") return null;
+  const row = raw as Partial<JsonSnapshot>;
+  const address = addr(row.address);
+  const balance = digits(row.balance);
+  const blockNumber = digits(row.blockNumber);
+  const blockTime = digits(row.blockTime);
+  const credit = digits(row.credit);
+  if (!address || balance === null || blockNumber === null || blockTime === null || credit === null) return null;
+  if (!Array.isArray(row.services) || !Array.isArray(row.streams)) return null;
+  const services: ServiceRow[] = [];
+  for (const item of row.services) {
+    const id = digits(item?.id);
+    const owner = addr(item?.owner);
+    const payee = addr(item?.payee);
+    const ratePerSec = digits(item?.ratePerSec);
+    if (id === null || !owner || !payee || ratePerSec === null || typeof item?.name !== "string" || typeof item.active !== "boolean") return null;
+    services.push({ id, name: item.name, owner, payee, ratePerSec, active: item.active });
+  }
+  const streams: StreamRow[] = [];
+  for (const item of row.streams) {
+    const id = digits(item?.id);
+    const payer = addr(item?.payer);
+    const payee = addr(item?.payee);
+    const ratePerSec = digits(item?.ratePerSec);
+    const deposit = digits(item?.deposit);
+    const start = digits(item?.start);
+    const stoppedAt = digits(item?.stoppedAt);
+    const claimed = digits(item?.claimed);
+    if (id === null || !payer || !payee || ratePerSec === null || deposit === null || start === null || stoppedAt === null || claimed === null) return null;
+    streams.push({ id, payer, payee, ratePerSec, deposit, start, stoppedAt, claimed });
+  }
+  return { address, balance, blockNumber, blockTime, services, streams, credit };
+}
+
+export function activityToJson(activity: Activity): JsonActivity {
+  return {
+    truncated: activity.truncated,
+    openTx: activity.openTx,
+    closeTx: activity.closeTx,
+    payouts: activity.payouts.map((row) => ({
+      kind: row.kind,
+      streamId: row.streamId?.toString() ?? null,
+      amount: row.amount.toString(),
+      tx: row.tx,
+      blockNumber: row.blockNumber.toString(),
+      time: row.time.toString(),
+    })),
+  };
+}
+
+export function activityFromJson(raw: unknown): Activity | null {
+  if (!raw || typeof raw !== "object") return null;
+  const row = raw as Partial<JsonActivity>;
+  if (typeof row.truncated !== "boolean" || !row.openTx || !row.closeTx || !Array.isArray(row.payouts)) return null;
+  const payouts: Payout[] = [];
+  for (const item of row.payouts) {
+    if (!item || !PAYOUT_KINDS.has(item.kind)) return null;
+    const amount = digits(item.amount);
+    const blockNumber = digits(item.blockNumber);
+    const time = digits(item.time);
+    const streamId = item.streamId === null ? null : digits(item.streamId);
+    const tx = item.tx === null ? null : hex(item.tx);
+    if (amount === null || blockNumber === null || time === null || (item.streamId !== null && streamId === null) || (item.tx !== null && !tx)) return null;
+    payouts.push({ kind: item.kind, streamId, amount, tx, blockNumber, time });
+  }
+  return { payouts, openTx: row.openTx, closeTx: row.closeTx, truncated: row.truncated };
+}
+
+export async function readDashboardCache(address: Address): Promise<{ snapshot: ProviderSnapshot; activity: Activity } | null> {
+  const res = await fetch(`/api/dashboard/${address.toLowerCase()}`).catch(() => null);
+  if (!res || res.status === 204 || !res.ok) return null;
+  const body = await res.json().catch(() => null) as { snapshot?: unknown; activity?: unknown } | null;
+  const snapshot = snapshotFromJson(body?.snapshot);
+  const activity = activityFromJson(body?.activity);
+  if (!snapshot || !activity) return null;
+  return { snapshot, activity };
+}
+
+export async function writeDashboardCache(address: Address, snapshot: ProviderSnapshot, activity: Activity): Promise<void> {
+  await fetch(`/api/dashboard/${address.toLowerCase()}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ snapshot: snapshotToJson(snapshot), activity: activityToJson(activity) }),
+  }).catch(() => undefined);
 }

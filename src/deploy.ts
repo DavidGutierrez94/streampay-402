@@ -1,5 +1,8 @@
 // Deploys StreamEscrow v2 only. Spend caps on chain live in StreamEscrowV3, which is not deployed — see README.
-import { pub, wallet, abi, bytecode, addrUrl, txUrl } from "./chain";
+import type { Hex } from "viem";
+import artifact from "../contracts/out/StreamEscrow.sol/StreamEscrow.json";
+import { pub, wallet, abi, addrUrl, txUrl } from "./chain";
+const bytecode = (artifact as { bytecode: { object: Hex } }).bytecode.object;
 const w = wallet(process.env.PAYER_KEY!);
 const hash = await w.deployContract({ abi, bytecode });
 const r = await pub.waitForTransactionReceipt({ hash });

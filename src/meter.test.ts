@@ -54,14 +54,14 @@ async function paid(streamId = "1", h = app()) {
   return h.request("/paid", { headers: { "X-PAYMENT-STREAM": streamId, "X-PAYMENT-SIG": sig } });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   process.env.ESCROW_ADDRESS = ESCROW;
   clock = START * 1000;
   reads = 0;
   activeFor = Number.POSITIVE_INFINITY;
-  resetPolicyStateForTests();
-  resetWebhooksForTests();
-  resetMeterSessionsForTests();
+  await resetPolicyStateForTests();
+  await resetWebhooksForTests();
+  await resetMeterSessionsForTests();
   resetClaimsForTests();
 });
 
@@ -69,7 +69,7 @@ describe("serveMetered", () => {
   test("402 without a stream, then metered output that stops on the duration cap", async () => {
     const bare = await app().request("/paid");
     expect(bare.status).toBe(402);
-    setPolicy({ kind: "key", serviceId: "7" }, { maxTotalSpend: null, maxRatePerSec: null, maxSessionDuration: 2 });
+    await setPolicy({ kind: "key", serviceId: "7" }, { maxTotalSpend: null, maxRatePerSec: null, maxSessionDuration: 2 });
     const res = await paid();
     expect(res.status).toBe(200);
     const body = await res.text();
@@ -81,8 +81,8 @@ describe("serveMetered", () => {
 
   test("rejects a stream priced above the rate cap and does not open a webhook", async () => {
     const hits: string[] = [];
-    setPolicy({ kind: "key", serviceId: "7" }, { maxTotalSpend: null, maxRatePerSec: parseEther("0.0001"), maxSessionDuration: null });
-    setWebhook("7", { url: "https://hooks.example/streampay", secret: SECRET });
+    await setPolicy({ kind: "key", serviceId: "7" }, { maxTotalSpend: null, maxRatePerSec: parseEther("0.0001"), maxSessionDuration: null });
+    await setWebhook("7", { url: "https://hooks.example/streampay", secret: SECRET });
     const res = await paid("4", app({
       sleep: async () => {},
       claim: async () => { hits.push("claim"); return null; },
@@ -94,7 +94,7 @@ describe("serveMetered", () => {
   });
 
   test("spend cap stops the stream and blocks a second one while the first is reserved", async () => {
-    setPolicy({ kind: "key", serviceId: "7" }, { maxTotalSpend: RATE * 2n, maxRatePerSec: null, maxSessionDuration: null });
+    await setPolicy({ kind: "key", serviceId: "7" }, { maxTotalSpend: RATE * 2n, maxRatePerSec: null, maxSessionDuration: null });
     const firstApp = app();
     const res = await paid("11", firstApp);
     expect(res.status).toBe(200);
@@ -114,7 +114,7 @@ describe("serveMetered", () => {
         return new Response("ok");
       },
     });
-    setWebhook("7", { url: `http://127.0.0.1:${receiver.port}/hook`, secret: SECRET });
+    await setWebhook("7", { url: `http://127.0.0.1:${receiver.port}/hook`, secret: SECRET });
     activeFor = 1;
     try {
       const res = await paid("20", app({

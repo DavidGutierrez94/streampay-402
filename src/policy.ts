@@ -1,6 +1,7 @@
 // Spend caps and session limits, enforced in the metering path before a stream is served.
 // Amounts are wei. A null limit means that dimension is not capped.
 import { formatEther, getAddress, isAddress, parseEther } from "viem";
+import { getStore, type PolicyBlob } from "./store";
 
 export type PolicyLimits = {
   maxTotalSpend: bigint | null;
@@ -35,17 +36,83 @@ export function subjectKey(subject: PolicySubject): string {
   }
 }
 
-export function resetPolicyStateForTests(): void {
+function limitsOf(subject: PolicySubject): PolicyLimits | null {
+  return policies.get(subjectKey(subject)) ?? null;
+}
+
+function bookOf(subject: PolicySubject): { spent: bigint; reserved: bigint } {
+  const row = ledgers.get(subjectKey(subject));
+  return { spent: row?.spent ?? 0n, reserved: row?.reserved ?? 0n };
+}
+
+function weiOrNull(value: string | null): bigint | null {
+  return value === null ? null : BigInt(value);
+}
+
+function loadBlob(blob: PolicyBlob): void {
   policies.clear();
   ledgers.clear();
   openSessions.clear();
+  for (const [key, limits] of Object.entries(blob.policies)) {
+    policies.set(key, {
+      maxTotalSpend: weiOrNull(limits.maxTotalSpend),
+      maxRatePerSec: weiOrNull(limits.maxRatePerSec),
+      maxSessionDuration: limits.maxSessionDuration,
+    });
+  }
+  for (const [key, row] of Object.entries(blob.ledgers)) {
+    ledgers.set(key, { spent: BigInt(row.spent), reserved: BigInt(row.reserved) });
+  }
+  for (const [key, row] of Object.entries(blob.sessions)) {
+    const reserved = new Map<string, bigint>();
+    for (const [subject, amount] of Object.entries(row.reserved)) reserved.set(subject, BigInt(amount));
+    openSessions.set(key, { subjects: [...row.subjects], reserved });
+  }
+}
+
+function saveBlob(blob: PolicyBlob): void {
+  blob.policies = {};
+  blob.ledgers = {};
+  blob.sessions = {};
+  for (const [key, limits] of policies) {
+    blob.policies[key] = {
+      maxTotalSpend: limits.maxTotalSpend?.toString() ?? null,
+      maxRatePerSec: limits.maxRatePerSec?.toString() ?? null,
+      maxSessionDuration: limits.maxSessionDuration,
+    };
+  }
+  for (const [key, row] of ledgers) {
+    blob.ledgers[key] = { spent: row.spent.toString(), reserved: row.reserved.toString() };
+  }
+  for (const [key, row] of openSessions) {
+    const reserved: Record<string, string> = {};
+    for (const [subject, amount] of row.reserved) reserved[subject] = amount.toString();
+    blob.sessions[key] = { subjects: [...row.subjects], reserved };
+  }
+}
+
+function inTxn<T>(fn: () => T): Promise<T> {
+  return getStore().withPolicy((blob) => {
+    loadBlob(blob);
+    const result = fn();
+    saveBlob(blob);
+    return result;
+  });
+}
+
+export function resetPolicyStateForTests(): Promise<void> {
+  return inTxn(() => {
+    policies.clear();
+    ledgers.clear();
+    openSessions.clear();
+  });
 }
 
 export function inferServiceId(): string {
   return process.env.POLICY_SERVICE_ID?.trim() || "infer";
 }
 
-export function setPolicy(subject: PolicySubject, limits: PolicyLimits): void {
+function setPolicySync(subject: PolicySubject, limits: PolicyLimits): void {
   const key = subjectKey(subject);
   if (limits.maxTotalSpend === null && limits.maxRatePerSec === null && limits.maxSessionDuration === null) {
     policies.delete(key);
@@ -54,13 +121,16 @@ export function setPolicy(subject: PolicySubject, limits: PolicyLimits): void {
   policies.set(key, { ...limits });
 }
 
-export function getLimits(subject: PolicySubject): PolicyLimits | null {
-  return policies.get(subjectKey(subject)) ?? null;
+export function setPolicy(subject: PolicySubject, limits: PolicyLimits): Promise<void> {
+  return inTxn(() => setPolicySync(subject, limits));
 }
 
-export function ledgerSnapshot(subject: PolicySubject): { spent: bigint; reserved: bigint } {
-  const row = ledgers.get(subjectKey(subject));
-  return { spent: row?.spent ?? 0n, reserved: row?.reserved ?? 0n };
+export function getLimits(subject: PolicySubject): Promise<PolicyLimits | null> {
+  return inTxn(() => limitsOf(subject));
+}
+
+export function ledgerSnapshot(subject: PolicySubject): Promise<{ spent: bigint; reserved: bigint }> {
+  return inTxn(() => bookOf(subject));
 }
 
 export type PolicyView = {
@@ -82,9 +152,13 @@ function mon(wei: bigint | null): string | null {
   return wei === null ? null : formatEther(wei);
 }
 
-export function viewPolicy(subject: PolicySubject): PolicyView {
-  const limits = getLimits(subject);
-  const book = ledgerSnapshot(subject);
+export function viewPolicy(subject: PolicySubject): Promise<PolicyView> {
+  return inTxn(() => viewPolicySync(subject));
+}
+
+function viewPolicySync(subject: PolicySubject): PolicyView {
+  const limits = limitsOf(subject);
+  const book = bookOf(subject);
   return {
     subject: subject.kind,
     serviceId: subject.serviceId,
@@ -102,12 +176,20 @@ export function viewPolicy(subject: PolicySubject): PolicyView {
 }
 
 /** Caps safe to echo on a public 402. Spend already booked stays on the authenticated GET. */
-export function publicPolicy(subject: PolicySubject): {
+export function publicPolicy(subject: PolicySubject): Promise<{
+  maxTotalSpend: string | null;
+  maxRatePerSec: string | null;
+  maxSessionDuration: number | null;
+} | null> {
+  return inTxn(() => publicPolicySync(subject));
+}
+
+function publicPolicySync(subject: PolicySubject): {
   maxTotalSpend: string | null;
   maxRatePerSec: string | null;
   maxSessionDuration: number | null;
 } | null {
-  const limits = getLimits(subject);
+  const limits = limitsOf(subject);
   if (!limits) return null;
   return {
     maxTotalSpend: limits.maxTotalSpend?.toString() ?? null,
@@ -144,7 +226,7 @@ export function parseLimits(body: unknown): { ok: true; limits: PolicyLimits } |
   return { ok: true, limits: { maxTotalSpend: spend.wei, maxRatePerSec: rate.wei, maxSessionDuration: duration } };
 }
 
-export function applyEnvPolicy(serviceId?: string): void {
+export async function applyEnvPolicy(serviceId?: string): Promise<void> {
   const spend = process.env.POLICY_MAX_TOTAL_SPEND?.trim() || null;
   const rate = process.env.POLICY_MAX_RATE_PER_SEC?.trim() || null;
   const durRaw = process.env.POLICY_MAX_SESSION_SECONDS?.trim() || null;
@@ -159,7 +241,7 @@ export function applyEnvPolicy(serviceId?: string): void {
     return;
   }
   const id = serviceId ?? inferServiceId();
-  setPolicy({ kind: "key", serviceId: id }, parsed.limits);
+  await setPolicy({ kind: "key", serviceId: id }, parsed.limits);
   console.log(`[policy] caps loaded for service ${id}`);
 }
 
@@ -207,6 +289,18 @@ export function beginSession(input: {
   deposit: bigint;
   startSec: number;
   nowMs: number;
+}): Promise<BeginResult> {
+  return inTxn(() => beginSessionSync(input));
+}
+
+function beginSessionSync(input: {
+  serviceId: string;
+  payer: string;
+  streamId: string;
+  rate: bigint;
+  deposit: bigint;
+  startSec: number;
+  nowMs: number;
 }): BeginResult {
   if (!isAddress(input.payer, { strict: false })) return { ok: false, status: 402, error: "bad payer" };
   const payer = getAddress(input.payer.toLowerCase() as `0x${string}`);
@@ -219,7 +313,7 @@ export function beginSession(input: {
   ];
   const rows: { key: string; limits: PolicyLimits }[] = [];
   for (const subject of subjects) {
-    const limits = getLimits(subject);
+    const limits = limitsOf(subject);
     if (limits) rows.push({ key: subjectKey(subject), limits });
   }
 
@@ -290,7 +384,11 @@ export function policyBlock(grant: SessionGrant, nowMs: number): "policy-duratio
   return null;
 }
 
-export function endSession(sessionKey: string, actual: bigint): void {
+export function endSession(sessionKey: string, actual: bigint): Promise<void> {
+  return inTxn(() => endSessionSync(sessionKey, actual));
+}
+
+function endSessionSync(sessionKey: string, actual: bigint): void {
   const rec = openSessions.get(sessionKey);
   if (!rec) return;
   openSessions.delete(sessionKey);

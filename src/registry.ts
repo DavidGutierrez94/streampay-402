@@ -8,6 +8,7 @@ import { pub, CHAIN_ID, addrUrl, wallet as mkWallet, txUrl } from "./chain";
 import { parseLimits, publicPolicy, setPolicy, viewPolicy, type PolicySubject } from "./policy";
 import { saveWebhookConfig, viewWebhook } from "./webhooks";
 import art from "./registry-artifact.json";
+import { getStore } from "./store";
 
 export const registryAbi = art.abi as any;
 export const registryBytecode = art.bytecode as Hex;
@@ -27,12 +28,29 @@ export type ServiceView = {
   name: string;
 };
 
+const REGISTRY_CACHE_SEC = 15;
+
 export async function readService(id: bigint): Promise<ServiceView> {
+  const key = id.toString();
+  try {
+    const hit = await getStore().getCachedService(key);
+    if (hit) return { owner: hit.owner as `0x${string}`, payee: hit.payee as `0x${string}`, ratePerSec: BigInt(hit.ratePerSec), active: hit.active, name: hit.name };
+  } catch (err) {
+    console.log("[registry] cache read failed", err instanceof Error ? err.message : "");
+  }
   const s = (await pub.readContract({ address: REGISTRY, abi: registryAbi, functionName: "service", args: [id] })) as any;
-  return { owner: s.owner, payee: s.payee, ratePerSec: s.ratePerSec as bigint, active: s.active as boolean, name: s.name as string };
+  const service: ServiceView = { owner: s.owner as `0x${string}`, payee: s.payee as `0x${string}`, ratePerSec: s.ratePerSec as bigint, active: s.active as boolean, name: s.name as string };
+  try {
+    await getStore().setCachedService(key, {
+      owner: service.owner, payee: service.payee, ratePerSec: service.ratePerSec.toString(), active: service.active, name: service.name,
+    }, REGISTRY_CACHE_SEC);
+  } catch (err) {
+    console.log("[registry] cache write failed", err instanceof Error ? err.message : "");
+  }
+  return service;
 }
 
-export function termsFor(id: bigint, s: Awaited<ReturnType<typeof readService>>) {
+export async function termsFor(id: bigint, s: Awaited<ReturnType<typeof readService>>) {
   const resourceUrl = `registry:${REGISTRY}:${id}`;
   const description = `${s.name} (${formatEther(s.ratePerSec)} MON/s)`;
   const terms = paymentRequirements({
@@ -45,7 +63,7 @@ export function termsFor(id: bigint, s: Awaited<ReturnType<typeof readService>>)
     publishableKey: pkFor(id),
     serviceName: s.name,
   });
-  const policy = publicPolicy({ kind: "key", serviceId: id.toString() });
+  const policy = await publicPolicy({ kind: "key", serviceId: id.toString() });
   if (policy) terms.extra.policy = policy;
   return paymentRequired(terms, resourceUrl);
 }
@@ -58,7 +76,7 @@ registry.get("/terms/:pk", async (c) => {
   if (id === null) return c.json({ error: "bad publishable key" }, 400);
   const s = await readService(id).catch(() => null);
   if (!s || !s.active) return c.json({ error: "unknown or inactive service" }, 404);
-  return c.json(termsFor(id, s));
+  return c.json(await termsFor(id, s));
 });
 // Providers: authenticate with a secret key (Authorization: Bearer sk_test_...)
 export async function authenticateProvider(c: Context): Promise<{ id: bigint } | Response> {
@@ -105,9 +123,9 @@ export function mountBillingAdmin(router: Hono, only?: bigint) {
     const agent = c.req.query("agent");
     if (agent) {
       if (!isAddress(agent)) return c.json({ error: "bad agent address" }, 400);
-      return c.json(viewPolicy({ kind: "agent", serviceId: auth.id.toString(), agent: getAddress(agent) }));
+      return c.json(await viewPolicy({ kind: "agent", serviceId: auth.id.toString(), agent: getAddress(agent) }));
     }
-    return c.json(viewPolicy({ kind: "key", serviceId: auth.id.toString() }));
+    return c.json(await viewPolicy({ kind: "key", serviceId: auth.id.toString() }));
   });
   router.put("/policy", async (c) => {
     const auth = await authFor(c);
@@ -117,18 +135,18 @@ export function mountBillingAdmin(router: Hono, only?: bigint) {
     if (!subject.ok) return c.json({ error: subject.error }, 400);
     const limits = parseLimits(body);
     if (!limits.ok) return c.json({ error: limits.error }, 400);
-    setPolicy(subject.subject, limits.limits);
-    return c.json(viewPolicy(subject.subject));
+    await setPolicy(subject.subject, limits.limits);
+    return c.json(await viewPolicy(subject.subject));
   });
   router.get("/webhook", async (c) => {
     const auth = await authFor(c);
     if (auth instanceof Response) return auth;
-    return c.json(viewWebhook(auth.id.toString()));
+    return c.json(await viewWebhook(auth.id.toString()));
   });
   router.put("/webhook", async (c) => {
     const auth = await authFor(c);
     if (auth instanceof Response) return auth;
-    const saved = saveWebhookConfig(auth.id.toString(), await c.req.json().catch(() => null));
+    const saved = await saveWebhookConfig(auth.id.toString(), await c.req.json().catch(() => null));
     if (!saved.ok) return c.json({ error: saved.error }, 400);
     return c.json(saved.view);
   });
@@ -138,7 +156,6 @@ mountBillingAdmin(registry);
 
 // Testnet gas drip so a fresh Privy embedded wallet can pay for its own registration tx.
 // One drip per address, global cap, from the demo payer wallet. Testnet only.
-const dripped = new Set<string>();
 const DRIP = parseEther(process.env.DRIP_MON ?? "0.05");
 const DRIP_CAP = Number(process.env.DRIP_CAP ?? 100);
 registry.post("/drip", async (c) => {
@@ -146,12 +163,27 @@ registry.post("/drip", async (c) => {
   const { address } = await c.req.json().catch(() => ({}));
   if (!isAddress(address ?? "")) return c.json({ error: "bad address" }, 400);
   const a = address.toLowerCase();
-  if (dripped.has(a) || dripped.size >= DRIP_CAP) return c.json({ error: "already dripped / cap reached" }, 429);
+  if (await getStore().hasDrip(a)) return c.json({ error: "already dripped / cap reached" }, 429);
   if ((await pub.getBalance({ address })) >= DRIP) return c.json({ error: "you already have gas" }, 409);
-  dripped.add(a);
+  const slot = await getStore().tryDrip(a, DRIP_CAP);
+  switch (slot) {
+    case "ok":
+      break;
+    case "dup":
+    case "cap":
+      return c.json({ error: "already dripped / cap reached" }, 429);
+    default: {
+      const _never: never = slot;
+      return c.json({ error: _never }, 500);
+    }
+  }
   try {
     const h = await mkWallet(process.env.PAYER_KEY).sendTransaction({ to: address, value: DRIP });
     await pub.waitForTransactionReceipt({ hash: h });
     return c.json({ tx: h, url: txUrl(h) });
-  } catch (e: any) { dripped.delete(a); return c.json({ error: e.shortMessage ?? "drip failed" }, 500); }
+  } catch (e: unknown) {
+    await getStore().releaseDrip(a);
+    const msg = typeof e === "object" && e !== null && "shortMessage" in e && typeof e.shortMessage === "string" ? e.shortMessage : "drip failed";
+    return c.json({ error: msg }, 500);
+  }
 });

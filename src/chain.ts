@@ -1,6 +1,6 @@
 import { createPublicClient, createWalletClient, http, defineChain, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import artifact from "../contracts/out/StreamEscrow.sol/StreamEscrow.json";
+import { escrowAbi } from "./escrow-abi";
 
 export const RPC_URL = process.env.RPC_URL ?? "https://rpc.ankr.com/monad_testnet";
 export const CHAIN_ID = Number(process.env.CHAIN_ID ?? 10143);
@@ -11,8 +11,7 @@ export const chain = defineChain({
   nativeCurrency: { name: "MON", symbol: "MON", decimals: 18 },
   rpcUrls: { default: { http: [RPC_URL] } },
 });
-export const abi = artifact.abi as any;
-export const bytecode = artifact.bytecode.object as Hex;
+export const abi = escrowAbi as any;
 export const pub = createPublicClient({ chain, transport: http(RPC_URL) });
 export const wallet = (key: string) =>
   createWalletClient({ account: privateKeyToAccount(key as Hex), chain, transport: http(RPC_URL) });

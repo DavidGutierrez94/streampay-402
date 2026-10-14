@@ -15,12 +15,15 @@
     "@streampay-402/client": "workspace:*",
     "@streampay-402/protocol": "workspace:*",
     "@streampay-402/provider": "workspace:*",
+    "@upstash/redis": "^1.39.0",
+    "@vercel/functions": "^3.10.1",
     "hono": "^4.13.13",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "viem": "^2.57.5"
   },
   "scripts": {
+    "build": "node scripts/stage-public.mjs",
     "build:onboard": "bun build web/src/onboard.tsx --outfile web/onboard.js --minify --target browser --define process.env.NODE_ENV='\"production\"' --define 'process.env={}'",
     "build:dashboard": "bun build web/src/dashboard.tsx --outfile web/dashboard.js --minify --target browser --define process.env.NODE_ENV='\"production\"' --define 'process.env={}'",
     "test": "forge build --root contracts && bun test",
