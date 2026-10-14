@@ -79,3 +79,6 @@ Built during the Monad hackathon (Oct 13, 2026) with AI coding assistants (an AI
 
 ## License
 MIT — see [LICENSE](LICENSE).
+
+## Onboarding (onchain sign-up + API keys)
+Privy email sign-up → embedded wallet → `ServiceRegistry` on Monad testnet → `pk_test_` / `sk_test_` keys. See [ONBOARDING.md](ONBOARDING.md). Live at `/onboard`.

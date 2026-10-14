@@ -10,7 +10,13 @@
     "typescript": "^7"
   },
   "dependencies": {
+    "@privy-io/react-auth": "^3.49.0",
     "hono": "^4.13.13",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "viem": "^2.57.5"
+  },
+  "scripts": {
+    "build:onboard": "bun build web/src/onboard.tsx --outfile web/onboard.js --minify --target browser --define process.env.NODE_ENV='\"production\"' --define 'process.env={}'"
   }
 }
