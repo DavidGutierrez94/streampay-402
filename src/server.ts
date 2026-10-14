@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { parseEther, formatEther, verifyMessage } from "viem";
 import { pub, abi, txUrl, addrUrl, CHAIN_ID, wallet } from "./chain";
+import { registry } from "./registry";
 
 const ESCROW = process.env.ESCROW_ADDRESS as `0x${string}`;
 const PAYEE = process.env.PAYEE_ADDRESS as `0x${string}`;
@@ -41,6 +42,9 @@ async function readStream(id: bigint) {
 
 const app = new Hono();
 app.get("/", (c) => c.html(Bun.file("web/index.html").text()));
+app.route("/api/registry", registry);   // onboarding: ServiceRegistry + pk_/sk_ keys
+app.get("/onboard", (c) => c.html(Bun.file("web/onboard.html").text()));
+app.get("/onboard.js", () => new Response(Bun.file("web/onboard.js"), { headers: { "content-type": "text/javascript" } }));
 app.get("/api/terms", (c) => c.json(terms()));
 
 const sessions = new Set<string>();          // H-2: one live session per stream
