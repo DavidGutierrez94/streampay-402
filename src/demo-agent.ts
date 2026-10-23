@@ -6,7 +6,7 @@ import { pub, wallet, abi, txUrl } from "./chain";
 import { sleep } from "./defer";
 
 export type FetchApp = {
-  request: (input: string, init?: RequestInit) => Promise<Response>;
+  request: (input: string, init?: RequestInit) => Promise<Response> | Response;
 };
 export type DemoReport = (kind: string, msg: string, hash?: string) => Promise<void>;
 
@@ -46,7 +46,9 @@ export async function runDemoAgent(app: FetchApp, report: DemoReport) {
   const openHash = await w.writeContract({ address: TRUSTED_ESCROW, abi, functionName: "open", args: [payTo, rate], value: deposit, gas: 200000n });
   const rc = await pub.waitForTransactionReceipt({ hash: openHash });
   if (rc.status !== "success") throw new Error("open reverted " + openHash);
-  const opened = parseEventLogs({ abi, logs: rc.logs, eventName: "Opened" })[0];
+  const opened = parseEventLogs({ abi, logs: rc.logs, eventName: "Opened" })[0] as
+    | { args: { id: bigint } }
+    | undefined;
   if (!opened) throw new Error("open event missing");
   const streamId = opened.args.id;
   await report("open", `opened stream #${streamId} with ${formatEther(deposit)} MON deposit`, openHash);
@@ -55,7 +57,7 @@ export async function runDemoAgent(app: FetchApp, report: DemoReport) {
   let stop = false;
   let watching = true;
   const agentStop = async () => {
-    const res = await app.request("/api/agent-stop").catch(() => null);
+    const res = await Promise.resolve(app.request("/api/agent-stop")).catch(() => null);
     if (!res?.ok) return { stop: false, closing: false };
     const body = await res.json().catch(() => ({})) as { stop?: boolean; closing?: boolean };
     return { stop: !!body.stop, closing: !!body.closing };
@@ -75,7 +77,9 @@ export async function runDemoAgent(app: FetchApp, report: DemoReport) {
     const closeHash = await w.writeContract({ address: TRUSTED_ESCROW, abi, functionName: "close", args: [streamId], gas: 200000n });
     const cr = await pub.waitForTransactionReceipt({ hash: closeHash });
     if (cr.status !== "success") throw new Error("close reverted " + closeHash);
-    const ev = parseEventLogs({ abi, logs: cr.logs, eventName: "Closed" })[0];
+    const ev = parseEventLogs({ abi, logs: cr.logs, eventName: "Closed" })[0] as
+      | { args: { paidToPayee: bigint; refunded: bigint } }
+      | undefined;
     if (!ev) throw new Error("close event missing");
     await report("close", `closed: paid ${formatEther(ev.args.paidToPayee)} MON to provider, refunded ${formatEther(ev.args.refunded)} MON instantly`, closeHash);
   };

@@ -1,0 +1,199 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    # Fork pull requests cannot read repository secrets.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Link Vercel project
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          # Empty optional ids make the CLI look up a blank scope. Pass them only when set.
+          if [ -z "${VERCEL_ORG_ID:-}" ]; then unset VERCEL_ORG_ID; else echo "VERCEL_ORG_ID=${VERCEL_ORG_ID}" >> "$GITHUB_ENV"; fi
+          if [ -z "${VERCEL_PROJECT_ID:-}" ]; then unset VERCEL_PROJECT_ID; else echo "VERCEL_PROJECT_ID=${VERCEL_PROJECT_ID}" >> "$GITHUB_ENV"; fi
+
+          # Link creates streampay-402 on the first run. Do not pass --project together
+          # with VERCEL_PROJECT_ID; the CLI rejects that combination.
+          if [ ! -f .vercel/project.json ] && [ -z "${VERCEL_PROJECT_ID:-}" ]; then
+            npx --yes vercel@latest link --yes --project streampay-402
+          fi
+
+          # Bun workspace: the demo app is the repository root, framework Hono.
+          # `link --yes` would otherwise mark every workspace package as a service.
+          # Root directory null is the repo root. The CLI treats "." as that same value.
+          npx --yes vercel@latest project update --framework hono --auto-detect root-directory --yes
+
+          # `link --yes` connects this Git repository. Disconnect so production
+          # deploys come only from this workflow.
+          disconnect_log=$(mktemp)
+          set +e
+          npx --yes vercel@latest git disconnect --yes >"$disconnect_log" 2>&1
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            if grep -Eqi 'no git repository connected|not connected' "$disconnect_log"; then
+              echo "Vercel Git integration is already off."
+            else
+              cat "$disconnect_log" >&2
+              exit "$status"
+            fi
+          else
+            echo "Disconnected Vercel Git integration."
+          fi
+          rm -f "$disconnect_log"
+
+      - name: Sync environment variables
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          PAYER_KEY: ${{ secrets.PAYER_KEY }}
+          PAYEE_KEY: ${{ secrets.PAYEE_KEY }}
+          PAYEE_ADDRESS: ${{ secrets.PAYEE_ADDRESS }}
+          RPC_URL: ${{ secrets.RPC_URL }}
+          ESCROW_ADDRESS: ${{ secrets.ESCROW_ADDRESS }}
+          REGISTRY_ADDRESS: ${{ secrets.REGISTRY_ADDRESS }}
+          PRIVY_APP_ID: ${{ secrets.PRIVY_APP_ID }}
+          PUBLIC_URL: ${{ secrets.PUBLIC_URL }}
+          DEMO_TOKEN: ${{ secrets.DEMO_TOKEN }}
+          RATE_PER_SEC: ${{ secrets.RATE_PER_SEC }}
+          KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
+          KV_REST_API_TOKEN: ${{ secrets.KV_REST_API_TOKEN }}
+          UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
+          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
+          CHAIN_ID: ${{ secrets.CHAIN_ID }}
+          EXPLORER: ${{ secrets.EXPLORER }}
+          TRUSTED_PAYEES: ${{ secrets.TRUSTED_PAYEES }}
+          MAX_RATE_PER_SEC: ${{ secrets.MAX_RATE_PER_SEC }}
+          MAX_DEPOSIT: ${{ secrets.MAX_DEPOSIT }}
+          TASK_SECONDS: ${{ secrets.TASK_SECONDS }}
+          DEPOSIT_SECONDS: ${{ secrets.DEPOSIT_SECONDS }}
+          RUN_COOLDOWN_MS: ${{ secrets.RUN_COOLDOWN_MS }}
+          DRIP_MON: ${{ secrets.DRIP_MON }}
+          DRIP_CAP: ${{ secrets.DRIP_CAP }}
+          POLICY_MAX_TOTAL_SPEND: ${{ secrets.POLICY_MAX_TOTAL_SPEND }}
+          POLICY_MAX_RATE_PER_SEC: ${{ secrets.POLICY_MAX_RATE_PER_SEC }}
+          POLICY_MAX_SESSION_SECONDS: ${{ secrets.POLICY_MAX_SESSION_SECONDS }}
+          POLICY_SERVICE_ID: ${{ secrets.POLICY_SERVICE_ID }}
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+          WEBHOOK_MAX_ATTEMPTS: ${{ secrets.WEBHOOK_MAX_ATTEMPTS }}
+          WEBHOOK_SERVICE_ID: ${{ secrets.WEBHOOK_SERVICE_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VERCEL_ORG_ID:-}" ]; then unset VERCEL_ORG_ID; fi
+          if [ -z "${VERCEL_PROJECT_ID:-}" ]; then unset VERCEL_PROJECT_ID; fi
+
+          is_wallet_key() {
+            case "$1" in
+              PAYER_KEY|PAYEE_KEY) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+
+          list_names() {
+            local target="$1" file
+            file=$(mktemp)
+            # stdout can include readable values. Keep it in the file and print names only.
+            npx --yes vercel@latest env ls "$target" >"$file"
+            awk '{ print $1 }' "$file" | grep -E '^[A-Z][A-Z0-9_]+$' || true
+            rm -f "$file"
+          }
+
+          add_if_missing() {
+            local key="$1" target="$2" value="$3" names log
+            names=$(list_names "$target")
+            if printf '%s\n' "$names" | grep -qx "$key"; then
+              if is_wallet_key "$key"; then
+                echo "skip $key ($target): existing wallet key left unchanged"
+              else
+                echo "skip $key ($target): already set"
+              fi
+              return 0
+            fi
+            log=$(mktemp)
+            if printf '%s' "$value" | npx --yes vercel@latest env add "$key" --environment "$target" --sensitive --yes >"$log" 2>&1; then
+              echo "added $key ($target)"
+              rm -f "$log"
+              return 0
+            fi
+            if grep -Eqi 'already exists|ENV_CONFLICT|duplicate' "$log"; then
+              echo "skip $key ($target): already set"
+              rm -f "$log"
+              return 0
+            fi
+            echo "vercel env add failed for $key ($target)" >&2
+            grep -F -v -- "$value" "$log" >&2 || true
+            rm -f "$log"
+            return 1
+          }
+
+          grep -E '^[[:space:]]*#?[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' .env.example \
+            | sed -E 's/^[[:space:]]*#[[:space:]]*//; s/=.*//' \
+            | while IFS= read -r key; do
+                [ -n "$key" ] || continue
+                value="${!key-}"
+                if [ -z "$value" ]; then
+                  echo "skip $key: GitHub secret is unset"
+                  continue
+                fi
+                # Never synthesize wallet keys. Only copy a secret that was already provided.
+                add_if_missing "$key" production "$value"
+                add_if_missing "$key" preview "$value"
+              done
+
+      - name: Pull, build, and deploy
+        id: deploy
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VERCEL_ORG_ID:-}" ]; then unset VERCEL_ORG_ID; fi
+          if [ -z "${VERCEL_PROJECT_ID:-}" ]; then unset VERCEL_PROJECT_ID; fi
+
+          if [ "$GITHUB_EVENT_NAME" != "pull_request" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            target=production
+            npx --yes vercel@latest pull --yes --environment=production
+            npx --yes vercel@latest build --prod
+            deploy_out=$(npx --yes vercel@latest deploy --prebuilt --prod)
+          else
+            target=preview
+            npx --yes vercel@latest pull --yes --environment=preview
+            npx --yes vercel@latest build
+            deploy_out=$(npx --yes vercel@latest deploy --prebuilt)
+          fi
+
+          url=$(printf '%s\n' "$deploy_out" | grep -Eo 'https://[^[:space:]]+' | tail -n 1)
+          if [ -z "$url" ]; then
+            echo "Deploy finished without a URL" >&2
+            printf '%s\n' "$deploy_out" >&2
+            exit 1
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          {
+            echo "## Deployment"
+            echo
+            echo "- Target: ${target}"
+            echo "- URL: ${url}"
+          } >> "$GITHUB_STEP_SUMMARY"

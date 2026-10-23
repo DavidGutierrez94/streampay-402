@@ -4,7 +4,8 @@
   "functions": {
     "src/index.ts": {
       "maxDuration": 300,
-      "includeFiles": "web/**"
+      "includeFiles": "web/*",
+      "excludeFiles": "web/src/**"
     }
   }
 }

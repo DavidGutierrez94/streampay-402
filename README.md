@@ -202,12 +202,39 @@ Manual audit on Oct 13 2026, full report in [AUDIT.md](AUDIT.md). All High and M
 
 Production origin: `https://streampay.davidgutierrez.ai`. The app is a Hono server on Vercel Functions with Fluid compute. `src/index.ts` is the Vercel entry (`maxDuration` 300s, enough for a 60 second stream plus the open, claim, and close transactions). `bun src/server.ts` is still the local server.
 
-1. Import this repo in Vercel. Fluid compute is enabled in `vercel.json`.
-2. Attach the domain `streampay.davidgutierrez.ai`.
-3. In Cloudflare DNS, CNAME `streampay` to the Vercel target (`cname.vercel-dns.com`, or the hostname Vercel shows for the project).
-4. Set `PUBLIC_URL=https://streampay.davidgutierrez.ai` and the variables below. Add Upstash Redis from the Vercel Marketplace so every isolate shares the demo log, stream lock, drip list, run cooldown, and registry cache.
+Deploys run only from GitHub Actions (`.github/workflows/deploy.yml`). A push to `main`, or a manual run of that workflow on `main`, ships production. A pull request ships a preview. The first run creates the Vercel project `streampay-402` with `vercel link`, so there is no manual import. This repo is a Bun workspace. The demo app is the repository root and the project framework is `hono`. The workflow turns off Vercel's own Git integration so a push is not also built by Vercel.
 
-`bun run build` copies `og.png`, the favicons, `theme.css`, and `onboard.js` into `public/` for the CDN. HTML routes stay on the function so the page head can be filled in per request. `/api/infer` and `/api/svc/:id` keep streaming SSE.
+### GitHub secrets
+
+Add these repository secrets before the first deploy. The workflow reads names from `.env.example`, copies a secret only when it is set, and never prints the value. `PAYER_KEY` and `PAYEE_KEY` are wallet keys: the workflow does not generate them, and it leaves an existing wallet key on Vercel unchanged. Other variables are added when missing and are not overwritten.
+
+| Secret | Required | Role |
+|---|---|---|
+| `VERCEL_TOKEN` | yes | Vercel CLI token |
+| `VERCEL_ORG_ID` | no | Team id, when the token can see more than one team |
+| `VERCEL_PROJECT_ID` | no | Use this after the project exists to skip linking by name |
+| `PAYER_KEY` | yes | Demo payer key. The testnet gas drip sends from this wallet |
+| `PAYEE_KEY` | yes | Provider key. `/api/infer` claims accrued earnings with it |
+| `PAYEE_ADDRESS` | yes | Payee in the demo 402 terms |
+| `RPC_URL` | yes | Monad JSON-RPC endpoint |
+| `ESCROW_ADDRESS` | yes | StreamEscrow v2 address |
+| `REGISTRY_ADDRESS` | yes | ServiceRegistry address |
+| `PRIVY_APP_ID` | yes | App id for email sign-up on `/onboard` |
+| `PUBLIC_URL` | yes | `https://streampay.davidgutierrez.ai` |
+| `DEMO_TOKEN` | yes | Shared secret for `POST /api/log` |
+| `KV_REST_API_URL` | one Redis pair | Redis REST URL shared by every isolate |
+| `KV_REST_API_TOKEN` | one Redis pair | Redis REST token |
+| `UPSTASH_REDIS_REST_URL` | alias of the URL | Same role as `KV_REST_API_URL` |
+| `UPSTASH_REDIS_REST_TOKEN` | alias of the token | Same role as `KV_REST_API_TOKEN` |
+| `RATE_PER_SEC` | no | MON per second for `/api/infer`. Default `0.001` |
+
+Commented keys in `.env.example` (`CHAIN_ID`, spend caps, webhook settings, and the rest) are optional. Add the same name as a GitHub secret when you want it on the deployment.
+
+### DNS
+
+In Cloudflare, CNAME `streampay` to `cname.vercel-dns.com`. After the first production deploy, attach `streampay.davidgutierrez.ai` to the Vercel project.
+
+`bun run build` copies `og.png`, the favicons, `theme.css`, `onboard.js`, and `dashboard.js` into `public/` for the CDN. HTML routes stay on the function so the page head can be filled in per request. `/api/infer` and `/api/svc/:id` keep streaming SSE.
 
 ## Environment
 
