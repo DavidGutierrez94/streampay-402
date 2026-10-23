@@ -18,11 +18,45 @@ export type WebName =
 
 const cache = new Map<WebName, Uint8Array>();
 
+// Each path is a literal. A dynamic `path.join(..., name)` makes the Vercel
+// tracer include every file under `web/`, including the UI sources, and the
+// function typecheck then fails on those browser files.
 async function readCwd(name: WebName): Promise<Uint8Array> {
+  switch (name) {
+    case "landing.html":
+      return readEither(path.join(process.cwd(), "web", "landing.html"), path.join(process.cwd(), "public", "landing.html"));
+    case "index.html":
+      return readEither(path.join(process.cwd(), "web", "index.html"), path.join(process.cwd(), "public", "index.html"));
+    case "onboard.html":
+      return readEither(path.join(process.cwd(), "web", "onboard.html"), path.join(process.cwd(), "public", "onboard.html"));
+    case "dashboard.html":
+      return readEither(path.join(process.cwd(), "web", "dashboard.html"), path.join(process.cwd(), "public", "dashboard.html"));
+    case "theme.css":
+      return readEither(path.join(process.cwd(), "web", "theme.css"), path.join(process.cwd(), "public", "theme.css"));
+    case "onboard.js":
+      return readEither(path.join(process.cwd(), "web", "onboard.js"), path.join(process.cwd(), "public", "onboard.js"));
+    case "dashboard.js":
+      return readEither(path.join(process.cwd(), "web", "dashboard.js"), path.join(process.cwd(), "public", "dashboard.js"));
+    case "og.png":
+      return readEither(path.join(process.cwd(), "web", "og.png"), path.join(process.cwd(), "public", "og.png"));
+    case "favicon.png":
+      return readEither(path.join(process.cwd(), "web", "favicon.png"), path.join(process.cwd(), "public", "favicon.png"));
+    case "apple-touch-icon.png":
+      return readEither(path.join(process.cwd(), "web", "apple-touch-icon.png"), path.join(process.cwd(), "public", "apple-touch-icon.png"));
+    case "favicon.ico":
+      return readEither(path.join(process.cwd(), "web", "favicon.ico"), path.join(process.cwd(), "public", "favicon.ico"));
+    default: {
+      const _never: never = name;
+      throw new Error(_never);
+    }
+  }
+}
+
+async function readEither(primary: string, fallback: string): Promise<Uint8Array> {
   try {
-    return new Uint8Array(await readFile(path.join(process.cwd(), "web", name)));
+    return new Uint8Array(await readFile(primary));
   } catch {
-    return new Uint8Array(await readFile(path.join(process.cwd(), "public", name)));
+    return new Uint8Array(await readFile(fallback));
   }
 }
 

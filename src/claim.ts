@@ -29,7 +29,8 @@ export async function claimOnchain(streamId: bigint, claimKey: string): Promise<
   const receipt = await pub.waitForTransactionReceipt({ hash });
   let amount = 0n;
   for (const ev of parseEventLogs({ abi, logs: receipt.logs, eventName: "Claimed" })) {
-    amount = (ev.args as { amount: bigint }).amount;
+    const claimed = ev as { args?: { amount?: bigint } };
+    amount = claimed.args?.amount ?? 0n;
     break;
   }
   return { hash, amount, status: receipt.status };
